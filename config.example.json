@@ -1,0 +1,12 @@
+{  
+  "database_path": "backlink_hunter.db",  
+  "default_concurrency": 10,  
+  "per_host_concurrency": 2,  
+  "request_timeout_seconds": 20,  
+  "maximum_response_bytes": 10485760,  
+  "maximum_redirects": 5,  
+  "user_agent": "BacklinkHunter/1.0 (+https://example.local/bh)",  
+  "respect_robots_txt": true,  
+  "verify_tls": true,  
+  "log_path": "backlink_hunter.log"  
+}
