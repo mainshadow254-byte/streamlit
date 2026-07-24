@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import List
-
 from backlink_hunter_core.net import FetchResult, FetchError
 
 from backlink_hunter_core.models import MatchMode, VerificationStatus

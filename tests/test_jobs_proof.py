@@ -1,16 +1,14 @@
-"""Tests: checkpoints, pause/resume/cancel control flags, empty-index message,
-
-and the full offline proof-mode pipeline."""
+"""Tests: checkpoints, pause/resume/cancel flags, empty-index message, proof mode."""
 
 from __future__ import annotations
 
 import os
 
-from backlink_hunter_core.importers import build_backlink, import_wat
+from backlink_hunter_core.importers import import_wat
 
 from backlink_hunter_core.index_jobs import JobManager
 
-from backlink_hunter_core.models import DatasetType, JobStatus, MatchMode
+from backlink_hunter_core.models import JobStatus, MatchMode
 
 from backlink_hunter_core.search import SearchFilters, SearchService
 
@@ -96,15 +94,9 @@ def test_empty_index_message_condition(db):
 
     assert db.is_empty()
 
-    # The UI/CLI show EMPTY_INDEX_MESSAGE precisely when is_empty() is True.
-
     assert EMPTY_INDEX_MESSAGE.startswith("No backlink index is available yet.")
 
 def test_proof_mode_full_pipeline(db):
-
-    """Fixture WAT -> index -> domain-only search -> export -> plaintext excluded."""
-
-    # 1-3) process fixture and insert into reverse index
 
     path = os.path.join(FIX, "sample.wat")
 
@@ -113,8 +105,6 @@ def test_proof_mode_full_pipeline(db):
     inserted, _ = db.insert_backlinks(bls)
 
     assert inserted >= 1
-
-    # 4-5) search using ONLY the target domain, return the source page
 
     svc = SearchService(db)
 
@@ -130,21 +120,11 @@ def test_proof_mode_full_pipeline(db):
 
                for r in rows)
 
-    # 6) export the result
-
     from backlink_hunter_core.export import export_csv, read_and_cleanup
 
     data = read_and_cleanup(export_csv(svc, f))
 
     assert b"amazon.com" in data
-
-    # 7) confirm plain-text mention is excluded:
-
-    # the WAT fixture mentions amazon.com only via a real link; the plaintext
-
-    # mention in the HTML fixture is not present in WAT Links, so no phantom row.
-
-    # Verify no row has an empty/target-less record.
 
     for r in rows:
 
@@ -160,8 +140,6 @@ def test_proof_mode_false_positive_excluded(db):
 
     svc = SearchService(db)
 
-    # notamazon.com is a distinct domain and must NOT appear under amazon.com
-
     amazon_rows = svc.page(
 
         SearchFilters(target="amazon.com", mode=MatchMode.ROOT_DOMAIN),
@@ -170,4 +148,4 @@ def test_proof_mode_false_positive_excluded(db):
 
     for r in amazon_rows:
 
-        assert "notamazon.com" not in r["target_hostname"]✅ Final test batch complete — test_security.py, test_verification.py, test_jobs_proof.py are whole.Say next for the last message: requirements.txt (with optional groups), pyproject.toml extras, and the fully rewritten README.md
+        assert "notamazon.com" not in r["target_hostname"]

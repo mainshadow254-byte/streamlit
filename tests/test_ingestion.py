@@ -2,20 +2,16 @@
 
 from __future__ import annotations
 
-import io
-
 import os
 
 import pytest
 
 from backlink_hunter_core.importers import (
 
-    ImportError_, backlinks_from_wat_page, backlinks_from_warc_record,
-
-    import_csv, import_file, import_wat, import_warc,
+    ImportError_, import_csv, import_file, import_wat, import_warc,
 
 )
-from backlink_hunter_core.models import DatasetType, MatchMode
+from backlink_hunter_core.models import MatchMode
 
 from backlink_hunter_core.search import SearchFilters, SearchService
 
@@ -63,19 +59,9 @@ def test_wat_import_excludes_plaintext_and_false_positives(db):
 
     svc = SearchService(db)
 
-    # amazon.com root domain matches the dp link and the co.uk is separate domain
-
     f = SearchFilters(target="amazon.com", mode=MatchMode.ROOT_DOMAIN)
 
     assert svc.count(f) >= 1
-
-    # false-positive domain must not match amazon.com
-
-    fp = SearchFilters(target="notamazon.com", mode=MatchMode.ROOT_DOMAIN)
-
-    # notamazon is present as its own domain, but must NOT be returned for amazon
-
-    assert svc.count(SearchFilters(target="amazon.com")) >= 1
 
 def test_warc_import_inserts_backlinks(db):
 
@@ -131,4 +117,4 @@ def test_gzip_warc_import(db):
 
     bls = list(import_warc(path, collection="fixture"))
 
-    assert len(bls) >= 1✅ test_db_search_export.py and test_ingestion.py are whole.Say next for the security/SSRF tests, verification tests, and jobs/checkpoints/proof-mode tests (final test batch)
+    assert len(bls) >= 1
