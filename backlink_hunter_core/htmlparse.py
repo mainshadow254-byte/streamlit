@@ -1,88 +1,191 @@
-"""Hyperlink extraction + rel classification using BeautifulSoup + lxml."""
+"""HTML parsing and hyperlink extraction using the stdlib html.parser."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from urllib.parse import urljoin, urlsplit
+from html.parser import HTMLParser
 
-from bs4 import BeautifulSoup
+from typing import List
 
+from .models import ExtractedLink, LinkType
 
-_BAD_SCHEMES = ("javascript:", "mailto:", "tel:", "data:", "file:", "ftp:", "gopher:")
+from .normalize import resolve_url, extract_hostname
 
+def classify_rel(rel_value: str) -> str:
 
-@dataclass
-class RawLink:
-    href: str
-    resolved: str
-    anchor_text: str
-    image_alt: str
-    rel: str
-    link_type: str
+    if rel_value is None:
 
+        return LinkType.FOLLOW
 
-def _rel_to_str(rel_attr) -> str:
-    """Normalize BeautifulSoup's multi-value ``rel`` attribute to text."""
-    if rel_attr is None:
-        return ""
-    if isinstance(rel_attr, (list, tuple)):
-        return " ".join(str(value) for value in rel_attr)
-    return str(rel_attr)
+    tokens = [t.strip().lower() for t in rel_value.replace(",", " ").split() if t.strip()]
 
+    flags = {t for t in tokens if t in {"nofollow", "sponsored", "ugc"}}
 
-def classify_rel(rel: str) -> str:
-    tokens = {token.strip().lower() for token in rel.split() if token.strip()}
-    flags = tokens & {"nofollow", "sponsored", "ugc"}
+    if not flags:
+
+        return LinkType.FOLLOW
+
     if len(flags) > 1:
-        return "MULTIPLE_REL_VALUES"
-    if "sponsored" in flags:
-        return "SPONSORED"
-    if "ugc" in flags:
-        return "UGC"
-    if "nofollow" in flags:
-        return "NOFOLLOW"
-    return "FOLLOW"
 
+        return LinkType.MULTIPLE_REL_VALUES
 
-def _base_url(soup: BeautifulSoup, page_url: str) -> str:
-    node = soup.find("base", href=True)
-    if node:
-        href = (node.get("href") or "").strip()
-        if href:
-            return urljoin(page_url, href)
-    return page_url
+    only = next(iter(flags))
 
+    return {
 
-def extract_links(html: str, page_url: str) -> tuple[str, list[RawLink]]:
-    """Return the page title and all valid, resolved hyperlinks."""
-    soup = BeautifulSoup(html or "", "lxml")
-    title_node = soup.find("title")
-    title = title_node.get_text(strip=True) if title_node else ""
-    base = _base_url(soup, page_url)
+        "nofollow": LinkType.NOFOLLOW,
 
-    links: list[RawLink] = []
-    for anchor in soup.find_all("a", href=True):
-        href = (anchor.get("href") or "").strip()
-        if not href or any(href.lower().startswith(scheme) for scheme in _BAD_SCHEMES):
-            continue
-        if href.startswith("//"):
-            scheme = urlsplit(page_url).scheme or "https"
-            resolved = f"{scheme}:{href}"
-        else:
-            resolved = urljoin(base, href)
-        if not urlsplit(resolved).scheme.startswith("http"):
-            continue
+        "sponsored": LinkType.SPONSORED,
 
-        image = anchor.find("img", alt=True)
-        rel = _rel_to_str(anchor.get("rel"))
-        links.append(
-            RawLink(
-                href=href,
-                resolved=resolved,
-                anchor_text=anchor.get_text(strip=True) or "",
-                image_alt=(image.get("alt") or "") if image else "",
-                rel=rel,
-                link_type=classify_rel(rel),
-            )
-        )
-    return title, links
+        "ugc": LinkType.UGC,
+
+    }[only]
+
+class _LinkParser(HTMLParser):
+
+    def __init__(self, base_url: str):
+
+        super().__init__(convert_charrefs=True)
+
+        self.base_url = base_url
+
+        self.links: List[ExtractedLink] = []
+
+        self.title: str = ""
+
+        self._in_title = False
+
+        self._a_stack: List[dict] = []
+
+    def handle_starttag(self, tag, attrs):
+
+        attrs_d = {k.lower(): (v or "") for k, v in attrs}
+
+        if tag == "title":
+
+            self._in_title = True
+
+        elif tag == "a":
+
+            href = attrs_d.get("href", "")
+
+            self._a_stack.append({
+
+                "href": href,
+
+                "rel": attrs_d.get("rel", ""),
+
+                "text": [],
+
+                "image_alt": "",
+
+                "is_image": False,
+
+            })
+
+        elif tag == "img" and self._a_stack:
+
+            alt = attrs_d.get("alt", "")
+
+            self._a_stack[-1]["is_image"] = True
+
+            if alt and not self._a_stack[-1]["image_alt"]:
+
+                self._a_stack[-1]["image_alt"] = alt
+
+    def handle_startendtag(self, tag, attrs):
+
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag):
+
+        if tag == "title":
+
+            self._in_title = False
+
+        elif tag == "a" and self._a_stack:
+
+            ctx = self._a_stack.pop()
+
+            self._finish_anchor(ctx)
+
+    def handle_data(self, data):
+
+        if self._in_title:
+
+            self.title += data
+
+        if self._a_stack and data.strip():
+
+            self._a_stack[-1]["text"].append(data.strip())
+
+    def _finish_anchor(self, ctx: dict):
+
+        href = ctx["href"]
+
+        resolved = resolve_url(self.base_url, href)
+
+        if not resolved:
+
+            return
+
+        host = extract_hostname(resolved)
+
+        if not host:
+
+            return
+
+        anchor_text = " ".join(ctx["text"]).strip()
+
+        image_alt = ctx["image_alt"].strip()
+
+        self.links.append(ExtractedLink(
+
+            href=href,
+
+            resolved_url=resolved,
+
+            hostname=host,
+
+            anchor_text=anchor_text if anchor_text else "",
+
+            image_alt=image_alt,
+
+            rel_original=ctx["rel"],
+
+            link_type=classify_rel(ctx["rel"]),
+
+            is_image=ctx["is_image"] and not anchor_text,
+
+        ))
+
+def parse_html_links(html: str, base_url: str) -> List[ExtractedLink]:
+
+    parser = _LinkParser(base_url)
+
+    try:
+
+        parser.feed(html)
+
+        parser.close()
+
+    except Exception:
+
+        pass
+
+    return parser.links
+
+def parse_title(html: str) -> str:
+
+    parser = _LinkParser("")
+
+    try:
+
+        parser.feed(html)
+
+        parser.close()
+
+    except Exception:
+
+        pass
+
+    return parser.title.strip()
