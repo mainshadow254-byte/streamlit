@@ -1,14 +1,4 @@
-"""Safe HTTP client: SSRF-guarded, rate-limited, size-capped, retry/backoff.
-
-Wraps `requests` when available, otherwise falls back to urllib. Every request
-
-is validated through security.assert_safe_url before connecting, redirects are
-
-re-validated hop-by-hop, response size is capped while streaming, TLS is always
-
-verified, and robots.txt is honoured when enabled.
-
-"""
+"""Safe HTTP client: SSRF-guarded, rate-limited, size-capped, retry/backoff."""
 
 from __future__ import annotations
 
@@ -18,7 +8,7 @@ import time
 
 from dataclasses import dataclass, field
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from urllib import robotparser
 
@@ -33,10 +23,6 @@ from .security import (
     SecurityError,
 
     assert_safe_url,
-
-    validate_url_scheme_host,
-
-    resolve_and_validate,
 
 )
 
@@ -88,12 +74,6 @@ class FetchResult:
 
             return ""
 
-# --------------------------------------------------------------------------- #
-
-# Rate limiting (token-bucket-ish: min interval per host + global)
-
-# --------------------------------------------------------------------------- #
-
 class RateLimiter:
 
     def __init__(self, global_rate: float, per_host_rate: float):
@@ -136,12 +116,6 @@ class RateLimiter:
 
             self._last_host[host] = now
 
-# --------------------------------------------------------------------------- #
-
-# Robots
-
-# --------------------------------------------------------------------------- #
-
 class RobotsCache:
 
     def __init__(self, user_agent: str, fetcher: "SafeHTTPClient"):
@@ -162,7 +136,7 @@ class RobotsCache:
 
         with self._lock:
 
-            rp = self._cache.get(base, "missing")  # type: ignore
+            rp = self._cache.get(base, "missing")
 
         if rp == "missing":
 
@@ -174,7 +148,7 @@ class RobotsCache:
 
         if rp is None:
 
-            return True  # no robots.txt or unreachable -> allowed
+            return True
 
         try:
 
@@ -214,12 +188,6 @@ class RobotsCache:
 
         return rp
 
-# --------------------------------------------------------------------------- #
-
-# HTTP client
-
-# --------------------------------------------------------------------------- #
-
 class SafeHTTPClient:
 
     def __init__(self, cfg: Optional[Config] = None):
@@ -240,8 +208,6 @@ class SafeHTTPClient:
 
             self._session = None
 
-    # ------------------------------------------------------------------ #
-
     def fetch(self, url: str, method: str = "GET",
 
               respect_robots: Optional[bool] = None,
@@ -253,8 +219,6 @@ class SafeHTTPClient:
         respect = self.cfg.respect_robots if respect_robots is None else respect_robots
 
         cap = max_bytes if max_bytes is not None else self.cfg.max_response_bytes
-
-        # Initial safety validation (scheme/host + DNS).
 
         assert_safe_url(url)
 
@@ -294,7 +258,7 @@ class SafeHTTPClient:
 
                 raise
 
-            except Exception as exc:  # network hiccup -> retry with backoff
+            except Exception as exc:
 
                 last_exc = exc
 
@@ -303,8 +267,6 @@ class SafeHTTPClient:
                 backoff = min(backoff * 2, 30)
 
         raise FetchError(f"Failed after {max_retries} retries: {url} ({last_exc})")
-
-    # ------------------------------------------------------------------ #
 
     def _do_fetch(self, url: str, method: str, cap: int) -> FetchResult:
 
@@ -320,11 +282,9 @@ class SafeHTTPClient:
 
         for _ in range(self.cfg.max_redirects + 1):
 
-            # Re-validate every hop (defends against redirect-based SSRF).
-
             assert_safe_url(current)
 
-            resp = self._request_once(current, method)
+            resp = self._request_once(current, method, cap)
 
             if resp["status"] in (301, 302, 303, 307, 308) and resp["location"]:
 
@@ -352,17 +312,15 @@ class SafeHTTPClient:
 
         raise FetchError(f"Too many redirects: {url}")
 
-    # ------------------------------------------------------------------ #
-
-    def _request_once(self, url: str, method: str) -> Dict:
+    def _request_once(self, url: str, method: str, cap: int) -> Dict:
 
         if _HAVE_REQUESTS:
 
-            return self._request_requests(url, method)
+            return self._request_requests(url, method, cap)
 
-        return self._request_urllib(url, method)  # pragma: no cover
+        return self._request_urllib(url, method, cap)  # pragma: no cover
 
-    def _request_requests(self, url: str, method: str) -> Dict:
+    def _request_requests(self, url: str, method: str, cap: int) -> Dict:
 
         assert self._session is not None
 
@@ -386,7 +344,7 @@ class SafeHTTPClient:
 
             if not (300 <= status < 400):
 
-                body = self._read_capped(r)
+                body = self._read_capped(r, cap)
 
             return {
 
@@ -398,9 +356,7 @@ class SafeHTTPClient:
 
             }
 
-    def _read_capped(self, r) -> bytes:
-
-        cap = self.cfg.max_response_bytes
+    def _read_capped(self, r, cap: int) -> bytes:
 
         buf = bytearray()
 
@@ -418,7 +374,7 @@ class SafeHTTPClient:
 
         return bytes(buf)
 
-    def _request_urllib(self, url: str, method: str) -> Dict:  # pragma: no cover
+    def _request_urllib(self, url: str, method: str, cap: int) -> Dict:  # pragma: no cover
 
         import urllib.request
 
@@ -437,8 +393,6 @@ class SafeHTTPClient:
                 status = resp.status
 
                 content_type = resp.headers.get("Content-Type", "")
-
-                cap = self.cfg.max_response_bytes
 
                 body = resp.read(cap + 1)
 
@@ -461,8 +415,6 @@ class SafeHTTPClient:
             raise FetchError(str(exc))
 
     def get_range(self, url: str, offset: int, length: int) -> bytes:
-
-        """Range GET (used for Common Crawl WARC/WAT byte ranges)."""
 
         assert_safe_url(url)
 
@@ -530,6 +482,4 @@ def _parse_retry_after(value: Optional[str]) -> Optional[float]:
 
     except ValueError:
 
-        # HTTP-date form not parsed precisely; fall back to a short wait.
-
-        return 5.0✅ Part complete — net.py is whole.Say next for verification.py (live backlink verification with the seven status states).
+        return 5.0

@@ -1,16 +1,4 @@
-"""Streaming WAT parser.
-
-WAT records are themselves WARC "metadata" records whose payload is JSON
-
-describing a captured page, including extracted outbound links under
-
-Envelope > Payload-Metadata > HTTP-Response-Metadata > HTML-Metadata > Links.
-
-We reuse the WARC framing from warc.py, then decode the JSON payload of each
-
-metadata record and yield structured page-link data.
-
-"""
+"""Streaming WAT parser."""
 
 from __future__ import annotations
 
@@ -22,7 +10,7 @@ from typing import BinaryIO, Dict, Iterator, List, Optional
 
 from .logging_setup import get_logger
 
-from .warc import iter_warc_records, iter_warc_file
+from .warc import iter_warc_records
 
 log = get_logger("wat")
 
@@ -30,15 +18,15 @@ log = get_logger("wat")
 
 class WatLink:
 
-    url: str            # raw href/url as recorded
+    url: str
 
-    text: str = ""      # anchor text
+    text: str = ""
 
     rel: str = ""
 
     alt: str = ""
 
-    path: str = ""      # e.g. "A@/href", "IMG@/src"
+    path: str = ""
 
 @dataclass
 
@@ -118,8 +106,6 @@ def _page_from_json(doc: Dict) -> Optional[WatPage]:
 
 def iter_wat_records(stream: BinaryIO, gzipped: bool = False) -> Iterator[WatPage]:
 
-    """Yield WatPage objects from a WAT stream."""
-
     for rec in iter_warc_records(stream, gzipped=gzipped, only_responses=False):
 
         if rec.record_type != "metadata":
@@ -146,4 +132,4 @@ def iter_wat_file(path: str) -> Iterator[WatPage]:
 
     with open(path, "rb") as fh:
 
-        yield from iter_wat_records(fh, gzipped=gz)✅ Part complete — warc.py and wat.py are whole.Say next for commoncrawl.py (collection listing + CDX lookups + byte-range fetching).
+        yield from iter_wat_records(fh, gzipped=gz)

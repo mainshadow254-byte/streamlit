@@ -1,20 +1,4 @@
-"""Common Crawl integration.
-
-Provides:
-
-  - collection listing (collinfo.json)
-
-  - CDX index queries for a domain/url
-
-  - byte-range retrieval of WARC/WAT records via the safe HTTP client
-
-Network access is required only for real Common Crawl operations; all functions
-
-degrade gracefully and raise clear errors when offline. Unit tests mock the
-
-HTTP client, so importing this module never triggers network access.
-
-"""
+"""Common Crawl integration: collections, CDX queries, byte-range retrieval."""
 
 from __future__ import annotations
 
@@ -24,9 +8,9 @@ import io
 
 import json
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from typing import Dict, Iterator, List, Optional
+from typing import Iterator, List, Optional
 
 from .config import Config, get_config
 
@@ -74,12 +58,6 @@ class CdxRecord:
 
     filename: str
 
-    @property
-
-    def warc_url(self) -> str:
-
-        return filename_to_data_url(self.filename)
-
 def filename_to_data_url(filename: str, cfg: Optional[Config] = None) -> str:
 
     cfg = cfg or get_config()
@@ -95,8 +73,6 @@ class CommonCrawlClient:
         self.cfg = cfg or get_config()
 
         self.client = client or SafeHTTPClient(self.cfg)
-
-    # ------------------------------------------------------------------ #
 
     def list_collections(self) -> List[Collection]:
 
@@ -130,19 +106,11 @@ class CommonCrawlClient:
 
         return f"{self.cfg.cc_index_server}/{collection_id}-index"
 
-    # ------------------------------------------------------------------ #
-
     def query_cdx(self, collection_id: str, url_pattern: str,
 
                   limit: int = 1000, match_type: str = "domain",
 
                   filters: Optional[List[str]] = None) -> Iterator[CdxRecord]:
-
-        """Query the CDX index. Yields CdxRecord objects.
-
-        match_type: 'exact' | 'prefix' | 'host' | 'domain'
-
-        """
 
         api = self._cdx_api_for(collection_id)
 
@@ -212,23 +180,15 @@ class CommonCrawlClient:
 
                 continue
 
-    # ------------------------------------------------------------------ #
-
     def fetch_record_bytes(self, filename: str, offset: int,
 
                            length: int) -> bytes:
 
-        """Fetch a single gzipped WARC/WAT record via HTTP Range."""
-
         url = filename_to_data_url(filename, self.cfg)
 
-        raw = self.client.get_range(url, offset, length)
-
-        return raw
+        return self.client.get_range(url, offset, length)
 
     def iter_warc_from_record(self, filename: str, offset: int, length: int):
-
-        """Fetch a WARC record byte range and parse it (single record)."""
 
         raw = self.fetch_record_bytes(filename, offset, length)
 
@@ -244,17 +204,9 @@ class CommonCrawlClient:
 
         yield from iter_wat_records(stream, gzipped=True)
 
-    # ------------------------------------------------------------------ #
-
     def list_wat_paths(self, collection_id: str,
 
                        max_files: Optional[int] = None) -> List[str]:
-
-        """Fetch the wat.paths.gz listing for a collection.
-
-        Returns relative dataset paths under the CC data host.
-
-        """
 
         url = (f"{self.cfg.cc_data_host}/crawl-data/"
 
@@ -314,14 +266,6 @@ class CommonCrawlClient:
 
     def stream_wat_file(self, relative_path: str) -> Iterator:
 
-        """Stream and parse an entire WAT file from Common Crawl.
-
-        Yields WatPage objects. The file is streamed and decompressed with a
-
-        size cap; it is not fully buffered beyond the gzip bound in warc.py.
-
-        """
-
         url = f"{self.cfg.cc_data_host}/{relative_path}"
 
         res = self.client.fetch(url, respect_robots=False,
@@ -330,4 +274,4 @@ class CommonCrawlClient:
 
         stream = io.BytesIO(res.body)
 
-        yield from iter_wat_records(stream, gzipped=relative_path.endswith(".gz"))✅ Part complete — commoncrawl.py is whole.Say next for importers.py (CSV / JSONL / Parquet / WARC / WAT / gzip user-supplied dataset importers with validation → Backlink records).
+        yield from iter_wat_records(stream, gzipped=relative_path.endswith(".gz"))

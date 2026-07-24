@@ -1,12 +1,4 @@
-"""Live verification of indexed backlinks.
-
-Given an indexed source page, re-fetch it safely and confirm whether the
-
-hyperlink to the target still exists. Archived evidence is preserved even when
-
-the live link is gone. Never marks an unavailable page as live.
-
-"""
+"""Live verification of indexed backlinks."""
 
 from __future__ import annotations
 
@@ -14,7 +6,7 @@ import hashlib
 
 import json
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from typing import Any, Dict, List, Optional
 
@@ -22,7 +14,7 @@ from .config import Config, get_config
 
 from .db import Database
 
-from .htmlparse import parse_html_links, parse_title
+from .htmlparse import parse_html_links
 
 from .logging_setup import get_logger
 
@@ -52,7 +44,7 @@ class VerificationResult:
 
     live_present: Optional[bool] = None
 
-    redirect_chain: List[str] = None  # type: ignore
+    redirect_chain: List[str] = field(default_factory=list)
 
     checked_at: str = ""
 
@@ -104,15 +96,11 @@ class Verifier:
 
         self.client = client or SafeHTTPClient(self.cfg)
 
-    # ------------------------------------------------------------------ #
-
     def verify(self, source_url: str, target: str,
 
                mode: str = MatchMode.ROOT_DOMAIN,
 
                had_archive: bool = True) -> VerificationResult:
-
-        """Verify a single source page for a live link to `target`."""
 
         spec = TargetSpec.parse(target, mode)
 
@@ -142,15 +130,15 @@ class Verifier:
 
         except FetchError as exc:
 
-            result.status = VerificationStatus.SOURCE_UNAVAILABLE
-
             result.detail = str(exc)
 
-            # Preserve archive knowledge.
+            result.status = (
 
-            if had_archive:
+                VerificationStatus.ARCHIVED_ONLY if had_archive
 
-                result.status = VerificationStatus.ARCHIVED_ONLY
+                else VerificationStatus.SOURCE_UNAVAILABLE
+
+            )
 
             return result
 
@@ -196,19 +184,11 @@ class Verifier:
 
             result.status = (
 
-                VerificationStatus.LIVE_CONFIRMED if not had_archive
+                VerificationStatus.ARCHIVED_CONFIRMED if had_archive
 
-                else VerificationStatus.ARCHIVED_CONFIRMED
+                else VerificationStatus.LIVE_CONFIRMED
 
             )
-
-            # ARCHIVED_CONFIRMED = was archived AND still live.
-
-            # Prefer LIVE_CONFIRMED wording when caller cares only about live:
-
-            if not had_archive:
-
-                result.status = VerificationStatus.LIVE_CONFIRMED
 
         else:
 
@@ -216,15 +196,11 @@ class Verifier:
 
         return result
 
-    # ------------------------------------------------------------------ #
-
     def verify_and_store(self, backlink_id: int, source_url: str, target: str,
 
                          mode: str = MatchMode.ROOT_DOMAIN,
 
                          had_archive: bool = True) -> VerificationResult:
-
-        """Verify then persist the outcome onto the reverse_links row."""
 
         result = self.verify(source_url, target, mode, had_archive)
 
@@ -274,8 +250,6 @@ class Verifier:
 
                            ) -> List[VerificationResult]:
 
-        """Verify a supplied list of source URLs against a target (no DB needed)."""
-
         results = []
 
         for url in source_urls:
@@ -288,4 +262,4 @@ class Verifier:
 
             results.append(self.verify(url, target, mode, had_archive=False))
 
-        return results✅ Part complete — verification.py is whole.Say next for warc.py and wat.py (streaming WARC/WAT record parsers with decompression-bomb guards).
+        return results
