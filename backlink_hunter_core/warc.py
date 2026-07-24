@@ -46,6 +46,16 @@ class WarcRecord:
 
             return ""
 
+def _decode_header_line(line: bytes) -> Tuple[str, str]:
+
+    k, v = line.split(b":", 1)
+
+    key = k.strip().decode("ascii", "replace").lower()
+
+    value = v.strip().decode("utf-8", "replace")
+
+    return key, value
+
 def _read_headers(stream: BinaryIO) -> Optional[Dict[str, str]]:
 
     headers: Dict[str, str] = {}
@@ -82,11 +92,9 @@ def _read_headers(stream: BinaryIO) -> Optional[Dict[str, str]]:
 
         if b":" in line:
 
-            k, v = line.split(b":", 1)
+            key, value = _decode_header_line(line)
 
-            headers[k.strip().decode("ascii", "replace").lower()] = \
-
-                v.strip().decode("utf-8", "replace")
+            headers[key] = value
 
     return headers
 
@@ -136,11 +144,9 @@ def _parse_http_payload(block: bytes) -> Tuple[Optional[int], Dict[str, str], by
 
             if b":" in hl:
 
-                k, v = hl.split(b":", 1)
+                key, value = _decode_header_line(hl)
 
-                http_headers[k.strip().decode("ascii", "replace").lower()] = \
-
-                    v.strip().decode("utf-8", "replace")
+                http_headers[key] = value
 
     return status, http_headers, body
 

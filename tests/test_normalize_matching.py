@@ -29,9 +29,7 @@ def test_registrable_domain_multilabel_suffix():
 
 def test_normalize_url_removes_default_port_and_fragment():
 
-    assert normalize_url("https://Example.com:443/path#frag") == \
-
-        "https://example.com/path"
+    assert normalize_url("https://Example.com:443/path#frag") == "https://example.com/path"
 
     assert normalize_url("http://example.com:80/") == "http://example.com/"
 
