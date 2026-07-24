@@ -1,36 +1,6 @@
 #!/usr/bin/env python3
 
-"""Backlink Hunter — command-line interface and self-test.
-
-Usage examples:
-
-  python backlink_hunter.py selftest
-
-  python backlink_hunter.py index build \
-
-      --collection CC-MAIN-2024-10 --dataset wat --max-records 10000
-
-  python backlink_hunter.py index build \
-
-      --source file --paths data/my_dump.csv --collection my-import
-
-  python backlink_hunter.py index status
-
-  python backlink_hunter.py index pause   --job 3
-
-  python backlink_hunter.py index resume  --job 3
-
-  python backlink_hunter.py index stop    --job 3
-
-  python backlink_hunter.py search amazon.com --page-size 100
-
-  python backlink_hunter.py search amazon.com --export backlinks.csv
-
-  python backlink_hunter.py verify --target amazon.com --source-list sources.txt
-
-No hardcoded display cap (no rows[:200]); the practical limit is your data.
-
-"""
+"""Backlink Hunter - command-line interface and self-test."""
 
 from __future__ import annotations
 
@@ -70,12 +40,6 @@ EMPTY_INDEX_MESSAGE = (
 
 )
 
-# --------------------------------------------------------------------------- #
-
-# Commands
-
-# --------------------------------------------------------------------------- #
-
 def cmd_index_build(args: argparse.Namespace, db: Database) -> int:
 
     worker = IndexWorker(db)
@@ -101,8 +65,6 @@ def cmd_index_build(args: argparse.Namespace, db: Database) -> int:
     print(f"Starting index job (source={args.source}, dataset={args.dataset}, "
 
           f"collection={args.collection}) ...")
-
-    # Run in the foreground for the CLI so output is deterministic.
 
     job_id = worker.start(params, background=False)
 
@@ -134,7 +96,7 @@ def cmd_index_status(args: argparse.Namespace, db: Database) -> int:
 
     print("Index status")
 
-    print(f"  database path        : {stats['db_path']}")
+    print(f"  database path         : {stats['db_path']}")
 
     print(f"  database exists       : {stats['db_exists']}")
 
@@ -270,8 +232,6 @@ def cmd_search(args: argparse.Namespace, db: Database) -> int:
 
         return 0
 
-    # Print pages (no artificial cap).
-
     page = 1
 
     shown = 0
@@ -346,16 +306,6 @@ def cmd_verify(args: argparse.Namespace, db: Database) -> int:
 
 def cmd_selftest(args: argparse.Namespace, db: Database) -> int:
 
-    """Offline self-test: exercises the full pipeline with an in-memory fixture.
-
-    Builds a tiny HTML fixture, extracts a real link, inserts it, searches by
-
-    target domain only, exports it, and confirms a plain-text mention is
-
-    excluded. Uses a temporary database so production data is untouched.
-
-    """
-
     import tempfile
 
     from backlink_hunter_core.config import Config, set_config
@@ -408,8 +358,6 @@ def cmd_selftest(args: argparse.Namespace, db: Database) -> int:
 
     title = parse_title(fixture_html)
 
-    # 1) plain-text mention must NOT appear as a link
-
     amazon_links = [l for l in links if "amazon.com" in l.hostname]
 
     if not amazon_links:
@@ -422,8 +370,6 @@ def cmd_selftest(args: argparse.Namespace, db: Database) -> int:
 
         print(f"  OK: extracted {len(amazon_links)} amazon.com hyperlink(s)")
 
-    # 2) mailto and empty hrefs excluded
-
     if any(l.href.startswith("mailto:") for l in links):
 
         print("  FAIL: mailto link was not excluded")
@@ -433,8 +379,6 @@ def cmd_selftest(args: argparse.Namespace, db: Database) -> int:
     else:
 
         print("  OK: mailto excluded")
-
-    # 3) insert into reverse index
 
     backlinks = []
 
@@ -460,8 +404,6 @@ def cmd_selftest(args: argparse.Namespace, db: Database) -> int:
 
     print(f"  OK: inserted {inserted} backlink(s) into reverse index")
 
-    # 4) search by target domain only
-
     service = SearchService(test_db)
 
     filters = SearchFilters(target="amazon.com", mode=MatchMode.ROOT_DOMAIN)
@@ -478,8 +420,6 @@ def cmd_selftest(args: argparse.Namespace, db: Database) -> int:
 
         ok = False
 
-    # 5) false-positive domain rejection
-
     fp_filters = SearchFilters(target="notamazon.com", mode=MatchMode.ROOT_DOMAIN)
 
     if service.count(fp_filters) == 0:
@@ -491,8 +431,6 @@ def cmd_selftest(args: argparse.Namespace, db: Database) -> int:
         print("  FAIL: false-positive domain matched")
 
         ok = False
-
-    # 6) export
 
     tmp = run_export("csv", service, filters)
 
@@ -507,8 +445,6 @@ def cmd_selftest(args: argparse.Namespace, db: Database) -> int:
         print("  FAIL: CSV export missing data")
 
         ok = False
-
-    # 7) empty-index messaging
 
     empty_db_path = os.path.join(tmpdir, "empty.db")
 
@@ -532,19 +468,13 @@ def cmd_selftest(args: argparse.Namespace, db: Database) -> int:
 
     empty_db.close()
 
-    set_config(cfg)  # leave a sane config
+    set_config(cfg)
 
     shutil.rmtree(tmpdir, ignore_errors=True)
 
     print("\nSELF-TEST:", "PASSED" if ok else "FAILED")
 
     return 0 if ok else 1
-
-# --------------------------------------------------------------------------- #
-
-# Helpers
-
-# --------------------------------------------------------------------------- #
 
 def _format_from_path(path: str) -> str:
 
@@ -560,12 +490,6 @@ def _format_from_path(path: str) -> str:
 
     return "csv"
 
-# --------------------------------------------------------------------------- #
-
-# Argument parsing
-
-# --------------------------------------------------------------------------- #
-
 def build_parser() -> argparse.ArgumentParser:
 
     p = argparse.ArgumentParser(
@@ -576,13 +500,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = p.add_subparsers(dest="command", required=True)
 
-    # selftest
-
     sp = sub.add_parser("selftest", help="Run offline self-test")
 
     sp.set_defaults(func=cmd_selftest)
-
-    # index
 
     ip = sub.add_parser("index", help="Index management")
 
@@ -636,8 +556,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     so.set_defaults(func=cmd_index_stop)
 
-    # search
-
     s = sub.add_parser("search", help="Search the reverse index by target")
 
     s.add_argument("target")
@@ -672,8 +590,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     s.set_defaults(func=cmd_search)
 
-    # verify
-
     v = sub.add_parser("verify", help="Live-verify sources against a target")
 
     v.add_argument("--target", required=True)
@@ -698,20 +614,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     setup_logging(cfg.log_dir, cfg.log_level)
 
-    # selftest manages its own DB; everything else uses the configured one.
-
-    if args.command == "selftest":
-
-        db = Database(cfg)
-
-        try:
-
-            return args.func(args, db)
-
-        finally:
-
-            db.close()
-
     db = Database(cfg)
 
     try:
@@ -724,4 +626,4 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
 
-    sys.exit(main())✅ Part complete — backlink_hunter.py (CLI + selftest) is whole.Say next for the Streamlit app (streamlit_app.py) with the 9 pages, Automatic Backlink Discovery as default, no candidate/seed inputs in automatic mode, pagination, and all exports.
+    sys.exit(main())

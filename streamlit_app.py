@@ -1,30 +1,4 @@
-"""Backlink Hunter — Streamlit interface.
-
-Nine pages, selected from the sidebar:
-
-  1. Backlink Search   (default; Automatic Backlink Discovery is the default mode)
-
-  2. Index Manager
-
-  3. Dataset Import
-
-  4. URL Verification
-
-  5. Seed Crawler
-
-  6. Search History
-
-  7. Errors
-
-  8. Settings
-
-  9. System Status
-
-Automatic Backlink Discovery requires ONLY a target domain — no candidate URL
-
-list and no seed sites. It queries the local reverse index. If the index is
-
-empty it shows the exact required empty-index message.
+"""Backlink Hunter - Streamlit interface.
 
 Launch:  streamlit run streamlit_app.py
 
@@ -46,11 +20,11 @@ from backlink_hunter_core.config import Config, get_config, set_config
 
 from backlink_hunter_core.db import Database
 
-from backlink_hunter_core.export import EXPORTERS, export as run_export, read_and_cleanup
+from backlink_hunter_core.export import export as run_export, read_and_cleanup
 
 from backlink_hunter_core.index_jobs import JobManager
 
-from backlink_hunter_core.index_worker import IndexWorker, check_disk_space
+from backlink_hunter_core.index_worker import IndexWorker
 
 from backlink_hunter_core.importers import import_file, ImportError_
 
@@ -97,12 +71,6 @@ PAGES = [
 
 ]
 
-# --------------------------------------------------------------------------- #
-
-# Shared resources
-
-# --------------------------------------------------------------------------- #
-
 @st.cache_resource
 
 def get_db() -> Database:
@@ -127,6 +95,16 @@ def human_bytes(n: int) -> str:
 
     return f"{n:.1f} PB"
 
+def _rerun() -> None:
+
+    if hasattr(st, "rerun"):
+
+        st.rerun()
+
+    else:  # pragma: no cover
+
+        st.experimental_rerun()
+
 def _download_button(label: str, fmt: str, service: SearchService,
 
                      filters: SearchFilters, key: str) -> None:
@@ -149,17 +127,11 @@ def _download_button(label: str, fmt: str, service: SearchService,
 
             key=f"dl_{key}")
 
-# --------------------------------------------------------------------------- #
-
-# Page: Backlink Search
-
-# --------------------------------------------------------------------------- #
-
 def page_backlink_search(db: Database) -> None:
 
-    st.header("🔎 Backlink Search")
+    st.header("Backlink Search")
 
-    mode_label = st.radio(
+    st.radio(
 
         "Search mode",
 
@@ -169,7 +141,7 @@ def page_backlink_search(db: Database) -> None:
 
         help="Automatic mode requires only a target domain. It queries the "
 
-             "local reverse index — no candidate URLs or seed sites needed.",
+             "local reverse index - no candidate URLs or seed sites needed.",
 
     )
 
@@ -281,8 +253,6 @@ def page_backlink_search(db: Database) -> None:
 
     search_clicked = st.button("Search", type="primary")
 
-    # Empty-index guard — the exact required message.
-
     if search_clicked or st.session_state.get("did_search"):
 
         if db.is_empty():
@@ -299,7 +269,7 @@ def page_backlink_search(db: Database) -> None:
 
     if not st.session_state.get("did_search"):
 
-        st.info("Enter a target domain and click **Search**.")
+        st.info("Enter a target domain and click Search.")
 
         if collections:
 
@@ -310,8 +280,6 @@ def page_backlink_search(db: Database) -> None:
             st.caption("No collections indexed yet.")
 
         return
-
-    # Build filters
 
     link_types: List[str] = []
 
@@ -375,7 +343,7 @@ def page_backlink_search(db: Database) -> None:
 
         return
 
-    st.success(f"**{total:,}** matching backlinks.")
+    st.success(f"{total:,} matching backlinks.")
 
     total_pages = max(1, (total + page_size - 1) // page_size)
 
@@ -383,7 +351,7 @@ def page_backlink_search(db: Database) -> None:
 
     with pc1:
 
-        if st.button("◀ Prev") and st.session_state.search_page > 1:
+        if st.button("Prev") and st.session_state.search_page > 1:
 
             st.session_state.search_page -= 1
 
@@ -397,15 +365,13 @@ def page_backlink_search(db: Database) -> None:
 
     with pc3:
 
-        if st.button("Next ▶") and st.session_state.search_page < total_pages:
+        if st.button("Next") and st.session_state.search_page < total_pages:
 
             st.session_state.search_page += 1
 
     rows = service.page(filters, page=int(st.session_state.search_page),
 
                         page_size=page_size)
-
-    # Optional live verification for the visible page only.
 
     if live_verify and rows:
 
@@ -433,8 +399,6 @@ def page_backlink_search(db: Database) -> None:
 
         prog.empty()
 
-    # Results table
-
     display_cols = [
 
         "source_url", "source_domain", "target_url", "anchor_text",
@@ -449,9 +413,7 @@ def page_backlink_search(db: Database) -> None:
 
     st.dataframe(table, use_container_width=True, hide_index=True)
 
-    # Evidence viewer
-
-    with st.expander("🔬 Evidence (provenance for a selected row)"):
+    with st.expander("Evidence (provenance for a selected row)"):
 
         idx = st.number_input("Row on this page", min_value=1,
 
@@ -493,8 +455,6 @@ def page_backlink_search(db: Database) -> None:
 
                    html.escape(str(row.get("anchor_text", ""))))
 
-    # Exports (all filtered matches, streamed — no row cap)
-
     st.subheader("Export (all filtered matches)")
 
     e1, e2, e3, e4 = st.columns(4)
@@ -525,15 +485,13 @@ def page_backlink_search(db: Database) -> None:
 
                          service, filters, "exp_pairs")
 
-# --------------------------------------------------------------------------- #
+def service_collections(db: Database) -> List[str]:
 
-# Page: Index Manager
-
-# --------------------------------------------------------------------------- #
+    return SearchService(db).available_collections()
 
 def page_index_manager(db: Database) -> None:
 
-    st.header("🗂️ Index Manager")
+    st.header("Index Manager")
 
     stats = db.stats()
 
@@ -555,9 +513,9 @@ def page_index_manager(db: Database) -> None:
 
     c6.metric("Failed records", stats["failed_records"])
 
-    st.caption(f"Database path: `{stats['db_path']}`  •  "
+    st.caption(f"Database path: {stats['db_path']}  |  "
 
-               f"exists: {stats['db_exists']}  •  "
+               f"exists: {stats['db_exists']}  |  "
 
                f"checkpoints: {stats['checkpoints']}")
 
@@ -651,7 +609,7 @@ def page_index_manager(db: Database) -> None:
 
     for j in jobs:
 
-        with st.expander(f"#{j['id']} {j['job_type']} — {j['status']} "
+        with st.expander(f"#{j['id']} {j['job_type']} - {j['status']} "
 
                          f"(stage: {j.get('stage','')})"):
 
@@ -665,19 +623,19 @@ def page_index_manager(db: Database) -> None:
 
                 st.error(j["error"])
 
-            b1, b2, b3, b4 = st.columns(4)
+            b1, b2, b3 = st.columns(3)
 
             if b1.button("Pause", key=f"pause_{j['id']}"):
 
-                jm.pause(j["id"]); st.rerun()
+                jm.pause(j["id"]); _rerun()
 
             if b2.button("Resume", key=f"resume_{j['id']}"):
 
-                IndexWorker(db).resume_job(j["id"], background=True); st.rerun()
+                IndexWorker(db).resume_job(j["id"], background=True); _rerun()
 
             if b3.button("Stop", key=f"stop_{j['id']}"):
 
-                jm.stop(j["id"]); st.rerun()
+                jm.stop(j["id"]); _rerun()
 
     st.subheader("Maintenance")
 
@@ -711,19 +669,9 @@ def page_index_manager(db: Database) -> None:
 
             st.success("Database compacted.")
 
-def service_collections(db: Database) -> List[str]:
-
-    return SearchService(db).available_collections()
-
-# --------------------------------------------------------------------------- #
-
-# Page: Dataset Import
-
-# --------------------------------------------------------------------------- #
-
 def page_dataset_import(db: Database) -> None:
 
-    st.header("📥 Dataset Import")
+    st.header("Dataset Import")
 
     st.write("Import real reverse-link data from supported files. "
 
@@ -813,15 +761,9 @@ def page_dataset_import(db: Database) -> None:
 
                     pass
 
-# --------------------------------------------------------------------------- #
-
-# Page: URL Verification
-
-# --------------------------------------------------------------------------- #
-
 def page_url_verification(db: Database) -> None:
 
-    st.header("✅ URL Verification")
+    st.header("URL Verification")
 
     st.write("Verify whether a supplied list of source pages currently links "
 
@@ -883,21 +825,15 @@ def page_url_verification(db: Database) -> None:
 
         } for r in results], use_container_width=True, hide_index=True)
 
-# --------------------------------------------------------------------------- #
-
-# Page: Seed Crawler
-
-# --------------------------------------------------------------------------- #
-
 def page_seed_crawler(db: Database) -> None:
 
-    st.header("🕷️ Seed Crawler")
+    st.header("Seed Crawler")
 
     st.write("Crawl a small set of seed pages, extract their outbound links, "
 
              "and add any that point to your target into the reverse index. "
 
-             "This is the classic seed workflow — optional and separate from "
+             "This is the classic seed workflow - optional and separate from "
 
              "Automatic Backlink Discovery.")
 
@@ -973,7 +909,11 @@ def page_seed_crawler(db: Database) -> None:
 
                         batch.append(bl)
 
-            except (FetchError, Exception) as exc:
+            except FetchError as exc:
+
+                db.record_error("seed_crawl", str(exc), detail=url)
+
+            except Exception as exc:
 
                 db.record_error("seed_crawl", str(exc), detail=url)
 
@@ -989,15 +929,9 @@ def page_seed_crawler(db: Database) -> None:
 
         st.success(f"Crawled {len(seeds)} seeds; inserted {inserted} backlinks.")
 
-# --------------------------------------------------------------------------- #
-
-# Page: Search History
-
-# --------------------------------------------------------------------------- #
-
 def page_search_history(db: Database) -> None:
 
-    st.header("🕘 Search History")
+    st.header("Search History")
 
     history = db.list_history(limit=200)
 
@@ -1015,15 +949,9 @@ def page_search_history(db: Database) -> None:
 
     } for h in history], use_container_width=True, hide_index=True)
 
-# --------------------------------------------------------------------------- #
-
-# Page: Errors
-
-# --------------------------------------------------------------------------- #
-
 def page_errors(db: Database) -> None:
 
-    st.header("⚠️ Failed Requests & Errors")
+    st.header("Failed Requests & Errors")
 
     errors = db.list_errors(limit=300)
 
@@ -1035,7 +963,7 @@ def page_errors(db: Database) -> None:
 
     if st.button("Clear errors"):
 
-        db.clear_errors(); st.rerun()
+        db.clear_errors(); _rerun()
 
     st.dataframe([{
 
@@ -1045,15 +973,9 @@ def page_errors(db: Database) -> None:
 
     } for e in errors], use_container_width=True, hide_index=True)
 
-# --------------------------------------------------------------------------- #
-
-# Page: Settings
-
-# --------------------------------------------------------------------------- #
-
 def page_settings(db: Database) -> None:
 
-    st.header("⚙️ Settings")
+    st.header("Settings")
 
     cfg = get_config()
 
@@ -1101,15 +1023,9 @@ def page_settings(db: Database) -> None:
 
                    "Persist them in config.json for future runs.")
 
-# --------------------------------------------------------------------------- #
-
-# Page: System Status
-
-# --------------------------------------------------------------------------- #
-
 def page_system_status(db: Database) -> None:
 
-    st.header("📊 System Status")
+    st.header("System Status")
 
     cfg = get_config()
 
@@ -1177,19 +1093,13 @@ def page_system_status(db: Database) -> None:
 
                "import into the local reverse index.")
 
-# --------------------------------------------------------------------------- #
-
-# Main
-
-# --------------------------------------------------------------------------- #
-
 def main() -> None:
 
-    st.set_page_config(page_title="Backlink Hunter", page_icon="🔗",
+    st.set_page_config(page_title="Backlink Hunter", page_icon="link",
 
                        layout="wide")
 
-    st.sidebar.title("🔗 Backlink Hunter")
+    st.sidebar.title("Backlink Hunter")
 
     page = st.sidebar.radio("Navigation", PAGES, index=0)
 
@@ -1233,4 +1143,4 @@ def main() -> None:
 
 if __name__ == "__main__":
 
-    main()✅ Part complete — streamlit_app.py is whole (all 9 pages, Automatic Backlink Discovery default, empty-index message wired in, streamed exports, evidence viewer, persisted jobs).Say next for the test suite + fixture builder (tests/build_fixtures.py and the offline pytest tests).
+    main()
