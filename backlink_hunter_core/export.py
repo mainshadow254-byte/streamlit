@@ -312,12 +312,4 @@ def read_and_cleanup(path: str) -> bytes:
 
         except OSError:
 
-            log.warning("Could not remove export temp file %s", path)That completes the new-API batch. On the obsolete v1 tests — delete these so pytest collects only the v2 suite:TextUnwrapCopied!Copytests/test_export.py
-
-tests/test_linkindex.py
-
-tests/test_matching.py
-
-tests/test_normalize.py
-
-tests/test_warc.pyThe v2 suite already covers all of that functionality under different filenames (test_normalize_matching.py, test_db_search_export.py, test_ingestion.py, etc.), so nothing is lost.One note to flag honestly: my message contained two throwaway insert_backlinks snippets before the final complete db.py. Commit only the file labeled "
+            log.warning("Could not remove export temp file %s", path)
