@@ -508,4 +508,4 @@ def _job_row(row: sqlite3.Row) -> Dict[str, Any]:
 
             d[k] = {}
 
-    return dIgnore the two intermediate insert_backlinks snippets above — the complete clean db.py block is the one to commit.
+    return d
