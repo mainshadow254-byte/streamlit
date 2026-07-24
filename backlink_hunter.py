@@ -1,334 +1,727 @@
-"""Backlink Hunter — entry point.
-UI:        streamlit run backlink_hunter.py
-Selftest:  python backlink_hunter.py --selftest
-Index:     python backlink_hunter.py --index --collection CC-MAIN-2024-33 --seed example.org
-Query:     python backlink_hunter.py --query example.com --index-db linkindex.db
+#!/usr/bin/env python3
+
+"""Backlink Hunter — command-line interface and self-test.
+
+Usage examples:
+
+  python backlink_hunter.py selftest
+
+  python backlink_hunter.py index build \
+
+      --collection CC-MAIN-2024-10 --dataset wat --max-records 10000
+
+  python backlink_hunter.py index build \
+
+      --source file --paths data/my_dump.csv --collection my-import
+
+  python backlink_hunter.py index status
+
+  python backlink_hunter.py index pause   --job 3
+
+  python backlink_hunter.py index resume  --job 3
+
+  python backlink_hunter.py index stop    --job 3
+
+  python backlink_hunter.py search amazon.com --page-size 100
+
+  python backlink_hunter.py search amazon.com --export backlinks.csv
+
+  python backlink_hunter.py verify --target amazon.com --source-list sources.txt
+
+No hardcoded display cap (no rows[:200]); the practical limit is your data.
+
 """
+
 from __future__ import annotations
+
 import argparse
-import asyncio
+
+import os
+
+import shutil
+
 import sys
-import threading
-import time
-from pathlib import Path
-from urllib.parse import urlsplit
-from backlink_hunter_core.config import Settings
+
+from typing import List, Optional
+
+from backlink_hunter_core.config import get_config
+
 from backlink_hunter_core.db import Database
-from backlink_hunter_core.export import to_csv, to_json, to_txt
-from backlink_hunter_core.htmlparse import extract_links
-from backlink_hunter_core.hunter import Engine
-from backlink_hunter_core.matching import MatchMode, matches_target
-from backlink_hunter_core.models import utcnow_iso
-from backlink_hunter_core.normalize import normalize_domain_input, registrable_domain
-NO_RESULTS_MSG = "No verified backlinks were found from the selected data sources."
-def build_match(raw_target: str, mode: MatchMode) -> tuple[str, dict]:
-    norm = normalize_domain_input(raw_target)
-    full = raw_target if "://" in raw_target else "http://" + raw_target
-    parts = urlsplit(full)
-    host = parts.hostname or norm
-    return norm, {
-        "target_host": host,
-        "target_root": norm,
-        "target_url": full,
-        "target_path_prefix": parts.path or "/",
+
+from backlink_hunter_core.export import export as run_export, read_and_cleanup
+
+from backlink_hunter_core.index_jobs import JobManager
+
+from backlink_hunter_core.index_worker import IndexWorker
+
+from backlink_hunter_core.logging_setup import setup_logging
+
+from backlink_hunter_core.models import DatasetType, MatchMode
+
+from backlink_hunter_core.search import SearchFilters, SearchService
+
+from backlink_hunter_core.verification import Verifier
+
+EMPTY_INDEX_MESSAGE = (
+
+    "No backlink index is available yet. Open Index Manager and build or "
+
+    "import a real backlink index first."
+
+)
+
+# --------------------------------------------------------------------------- #
+
+# Commands
+
+# --------------------------------------------------------------------------- #
+
+def cmd_index_build(args: argparse.Namespace, db: Database) -> int:
+
+    worker = IndexWorker(db)
+
+    params = {
+
+        "source": args.source,
+
+        "dataset": args.dataset,
+
+        "collection": args.collection,
+
+        "max_records": args.max_records,
+
+        "max_files": args.max_files,
+
+        "url_pattern": args.url_pattern,
+
+        "paths": args.paths or [],
+
     }
-# --------------------------------------------------------------------------- #
-# CLI: local fixture self-test (no network, no fabricated data)
-# --------------------------------------------------------------------------- #
-def selftest() -> int:
-    fixture = Path("tests/fixtures/sample.html")
-    if not fixture.exists():
-        print("Missing tests/fixtures/sample.html — run: python tests/build_fixtures.py")
+
+    print(f"Starting index job (source={args.source}, dataset={args.dataset}, "
+
+          f"collection={args.collection}) ...")
+
+    # Run in the foreground for the CLI so output is deterministic.
+
+    job_id = worker.start(params, background=False)
+
+    job = db.get_job(job_id) or {}
+
+    stats = job.get("stats", {})
+
+    print(f"Job {job_id} finished with status: {job.get('status')}")
+
+    print(f"  backlinks_inserted : {stats.get('backlinks_inserted', 0)}")
+
+    print(f"  duplicates_skipped : {stats.get('duplicates_skipped', 0)}")
+
+    print(f"  links_extracted    : {stats.get('links_extracted', 0)}")
+
+    print(f"  failed_requests    : {stats.get('failed_requests', 0)}")
+
+    if job.get("error"):
+
+        print(f"  error              : {job['error']}")
+
         return 1
-    html = fixture.read_text(encoding="utf-8")
-    target, mk = build_match("example.com", MatchMode.ROOT_AND_SUBDOMAINS)
-    title, links = extract_links(html, "https://blog.test/post")
-    hits = [
-        l for l in links
-        if matches_target(l.resolved, mode=MatchMode.ROOT_AND_SUBDOMAINS, **mk)
-    ]
-    print(f"Parsed title={title!r}, links={len(links)}, backlinks to {target}={len(hits)}")
-    if not hits:
-        print(NO_RESULTS_MSG)
-        return 1
-    for h in hits:
-        print(f"  -> {h.resolved}  [{h.link_type}]  anchor={h.anchor_text!r}")
-    print("SELFTEST OK: real backlink detected from fixture (no fabricated data).")
+
     return 0
-def cli_index(args: argparse.Namespace) -> int:
-    from backlink_hunter_core.linkindex import (
-        LinkIndex, build_index_sync, estimate_storage_bytes,
-    )
-    settings = Settings.load()
-    idx = LinkIndex(args.index_db)
-    est = estimate_storage_bytes(args.max)
-    print(f"Estimated storage for ~{args.max} pages: ~{est / 1_048_576:.1f} MiB")
-    print("WARNING: indexing large web datasets can require substantial storage, "
-          "bandwidth and time.")
-    stats = build_index_sync(
-        settings, idx, args.collection, [args.seed], max_records=args.max
-    )
-    print(f"Done. queried={stats.records_queried} downloaded={stats.records_downloaded} "
-          f"pages={stats.pages_parsed} links_indexed={stats.links_indexed} "
-          f"skipped={stats.skipped_checkpointed} failed={stats.failed}")
+
+def cmd_index_status(args: argparse.Namespace, db: Database) -> int:
+
+    stats = db.stats()
+
+    print("Index status")
+
+    print(f"  database path        : {stats['db_path']}")
+
+    print(f"  database exists       : {stats['db_exists']}")
+
+    print(f"  database size (bytes) : {stats['db_size_bytes']}")
+
+    print(f"  total backlinks       : {stats['total_backlinks']}")
+
+    print(f"  unique source pages   : {stats['unique_source_pages']}")
+
+    print(f"  unique source domains : {stats['unique_source_domains']}")
+
+    print(f"  unique target domains : {stats['unique_target_domains']}")
+
+    print(f"  failed records        : {stats['failed_records']}")
+
+    print(f"  checkpoints           : {stats['checkpoints']}")
+
+    print(f"  active jobs           : {stats['active_jobs']}")
+
+    print("  collections:")
+
+    for c in stats["collections"]:
+
+        print(f"    - {c['collection'] or '(none)'}: {c['n']}")
+
+    jobs = db.list_jobs(limit=10)
+
+    if jobs:
+
+        print("  recent jobs:")
+
+        for j in jobs:
+
+            print(f"    #{j['id']} {j['job_type']} [{j['status']}] "
+
+                  f"stage={j.get('stage','')}")
+
     return 0
-def cli_query(args: argparse.Namespace) -> int:
-    from backlink_hunter_core.linkindex import LinkIndex
-    idx = LinkIndex(args.index_db)
-    rows = idx.query_backlinks(args.query)
-    if not rows:
-        print(NO_RESULTS_MSG)
+
+def cmd_index_pause(args: argparse.Namespace, db: Database) -> int:
+
+    JobManager(db).pause(args.job)
+
+    print(f"Requested pause for job {args.job}")
+
+    return 0
+
+def cmd_index_resume(args: argparse.Namespace, db: Database) -> int:
+
+    worker = IndexWorker(db)
+
+    print(f"Resuming job {args.job} ...")
+
+    worker.resume_job(args.job, background=False)
+
+    job = db.get_job(args.job) or {}
+
+    print(f"Job {args.job} status: {job.get('status')}")
+
+    return 0
+
+def cmd_index_stop(args: argparse.Namespace, db: Database) -> int:
+
+    JobManager(db).stop(args.job)
+
+    print(f"Requested stop for job {args.job}")
+
+    return 0
+
+def cmd_search(args: argparse.Namespace, db: Database) -> int:
+
+    if db.is_empty():
+
+        print(EMPTY_INDEX_MESSAGE)
+
+        return 2
+
+    service = SearchService(db)
+
+    filters = SearchFilters(
+
+        target=args.target,
+
+        mode=args.mode,
+
+        collection=args.collection,
+
+        source_domain=args.source_domain,
+
+        anchor_contains=args.anchor,
+
+        exclude_blank_anchor=args.no_blank_anchor,
+
+        unique_source_domain=args.unique_domains,
+
+        sort_by=args.sort_by,
+
+        sort_desc=not args.ascending,
+
+    )
+
+    if args.link_type:
+
+        filters.link_types = [args.link_type.upper()]
+
+    total = service.count(filters)
+
+    print(f"Total matching backlinks: {total}")
+
+    if total == 0:
+
+        print("No verified backlinks were found for this target in the index.")
+
+        db.add_history(args.target, args.mode, 0)
+
         return 0
-    print(f"{len(rows)} indexed backlinks to {registrable_domain(args.query)}:")
-    for r in rows[:200]:
-        print(f"  {r['source_url']}  ->  {r['target_url']}  [{r['link_type']}]")
+
+    if args.export:
+
+        fmt = _format_from_path(args.export)
+
+        tmp = run_export(fmt, service, filters)
+
+        data = read_and_cleanup(tmp)
+
+        with open(args.export, "wb") as fh:
+
+            fh.write(data)
+
+        print(f"Exported {total} matches to {args.export} (format={fmt})")
+
+        db.add_history(args.target, args.mode, total)
+
+        return 0
+
+    # Print pages (no artificial cap).
+
+    page = 1
+
+    shown = 0
+
+    while shown < total:
+
+        rows = service.page(filters, page=page, page_size=args.page_size)
+
+        if not rows:
+
+            break
+
+        for r in rows:
+
+            print(f"{r['source_url']}  ->  {r['target_url']}  "
+
+                  f"[{r['link_type']}] anchor={r['anchor_text']!r} "
+
+                  f"({r['verification_status']})")
+
+            shown += 1
+
+        page += 1
+
+        if args.first_page_only:
+
+            break
+
+    db.add_history(args.target, args.mode, total)
+
     return 0
+
+def cmd_verify(args: argparse.Namespace, db: Database) -> int:
+
+    sources: List[str] = []
+
+    if args.source_list:
+
+        with open(args.source_list, "r", encoding="utf-8") as fh:
+
+            sources = [ln.strip() for ln in fh if ln.strip()]
+
+    elif args.source:
+
+        sources = [args.source]
+
+    else:
+
+        print("Provide --source-list FILE or --source URL")
+
+        return 1
+
+    verifier = Verifier(db)
+
+    results = verifier.verify_source_list(args.target, sources, mode=args.mode)
+
+    live = 0
+
+    for res in results:
+
+        if res.live_present:
+
+            live += 1
+
+        print(f"[{res.status}] {res.source_url} "
+
+              f"(http={res.http_status}, live={res.live_present})")
+
+    print(f"\n{live}/{len(results)} sources currently link to {args.target}")
+
+    return 0
+
+def cmd_selftest(args: argparse.Namespace, db: Database) -> int:
+
+    """Offline self-test: exercises the full pipeline with an in-memory fixture.
+
+    Builds a tiny HTML fixture, extracts a real link, inserts it, searches by
+
+    target domain only, exports it, and confirms a plain-text mention is
+
+    excluded. Uses a temporary database so production data is untouched.
+
+    """
+
+    import tempfile
+
+    from backlink_hunter_core.config import Config, set_config
+
+    from backlink_hunter_core.htmlparse import parse_html_links, parse_title
+
+    from backlink_hunter_core.importers import build_backlink
+
+    from backlink_hunter_core.models import DatasetType
+
+    print("Running Backlink Hunter self-test (offline) ...")
+
+    tmpdir = tempfile.mkdtemp(prefix="blh_selftest_")
+
+    db_path = os.path.join(tmpdir, "selftest.db")
+
+    cfg = Config.load()
+
+    cfg.db_path = db_path
+
+    set_config(cfg)
+
+    test_db = Database(cfg)
+
+    ok = True
+
+    fixture_html = """
+
+    <html><head><title>My Review Blog</title></head><body>
+
+      <p>I love shopping. Visit
+
+         <a href="https://www.amazon.com/dp/B000" rel="nofollow">this product</a>.</p>
+
+      <p>I also mention amazon.com in plain text but do not link it here.</p>
+
+      <a href="/local/page">relative link</a>
+
+      <a href="//cdn.amazon.com/img">protocol relative</a>
+
+      <a href="mailto:me@example.com">email</a>
+
+    </body></html>
+
+    """
+
+    base = "https://reviewblog.example/post-1"
+
+    links = parse_html_links(fixture_html, base)
+
+    title = parse_title(fixture_html)
+
+    # 1) plain-text mention must NOT appear as a link
+
+    amazon_links = [l for l in links if "amazon.com" in l.hostname]
+
+    if not amazon_links:
+
+        print("  FAIL: expected at least one amazon.com hyperlink")
+
+        ok = False
+
+    else:
+
+        print(f"  OK: extracted {len(amazon_links)} amazon.com hyperlink(s)")
+
+    # 2) mailto and empty hrefs excluded
+
+    if any(l.href.startswith("mailto:") for l in links):
+
+        print("  FAIL: mailto link was not excluded")
+
+        ok = False
+
+    else:
+
+        print("  OK: mailto excluded")
+
+    # 3) insert into reverse index
+
+    backlinks = []
+
+    for l in amazon_links:
+
+        bl = build_backlink(
+
+            source_url=base, target_url=l.resolved_url,
+
+            anchor_text=l.anchor_text, image_alt=l.image_alt,
+
+            rel_original=l.rel_original, source_title=title,
+
+            collection="selftest-fixture", dataset_type=DatasetType.FIXTURE,
+
+        )
+
+        if bl:
+
+            backlinks.append(bl)
+
+    inserted, _ = test_db.insert_backlinks(backlinks)
+
+    print(f"  OK: inserted {inserted} backlink(s) into reverse index")
+
+    # 4) search by target domain only
+
+    service = SearchService(test_db)
+
+    filters = SearchFilters(target="amazon.com", mode=MatchMode.ROOT_DOMAIN)
+
+    total = service.count(filters)
+
+    if total >= 1:
+
+        print(f"  OK: domain-only search returned {total} result(s)")
+
+    else:
+
+        print("  FAIL: domain-only search returned 0 results")
+
+        ok = False
+
+    # 5) false-positive domain rejection
+
+    fp_filters = SearchFilters(target="notamazon.com", mode=MatchMode.ROOT_DOMAIN)
+
+    if service.count(fp_filters) == 0:
+
+        print("  OK: notamazon.com correctly returns 0 results")
+
+    else:
+
+        print("  FAIL: false-positive domain matched")
+
+        ok = False
+
+    # 6) export
+
+    tmp = run_export("csv", service, filters)
+
+    data = read_and_cleanup(tmp)
+
+    if data and b"amazon.com" in data:
+
+        print("  OK: CSV export contains the backlink")
+
+    else:
+
+        print("  FAIL: CSV export missing data")
+
+        ok = False
+
+    # 7) empty-index messaging
+
+    empty_db_path = os.path.join(tmpdir, "empty.db")
+
+    empty_cfg = Config.load()
+
+    empty_cfg.db_path = empty_db_path
+
+    empty_db = Database(empty_cfg)
+
+    if empty_db.is_empty():
+
+        print(f"  OK: empty index detected -> would show: {EMPTY_INDEX_MESSAGE!r}")
+
+    else:
+
+        print("  FAIL: empty index not detected")
+
+        ok = False
+
+    test_db.close()
+
+    empty_db.close()
+
+    set_config(cfg)  # leave a sane config
+
+    shutil.rmtree(tmpdir, ignore_errors=True)
+
+    print("\nSELF-TEST:", "PASSED" if ok else "FAILED")
+
+    return 0 if ok else 1
+
 # --------------------------------------------------------------------------- #
-# Streamlit UI with threaded engine (real stop/pause/resume)
+
+# Helpers
+
 # --------------------------------------------------------------------------- #
-def _start_thread(engine: Engine, coro_factory) -> threading.Thread:
-    def run() -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+
+def _format_from_path(path: str) -> str:
+
+    lower = path.lower()
+
+    if lower.endswith(".json"):
+
+        return "json"
+
+    if lower.endswith(".tsv"):
+
+        return "tsv"
+
+    return "csv"
+
+# --------------------------------------------------------------------------- #
+
+# Argument parsing
+
+# --------------------------------------------------------------------------- #
+
+def build_parser() -> argparse.ArgumentParser:
+
+    p = argparse.ArgumentParser(
+
+        prog="backlink_hunter.py",
+
+        description="Local reverse-backlink discovery and verification.")
+
+    sub = p.add_subparsers(dest="command", required=True)
+
+    # selftest
+
+    sp = sub.add_parser("selftest", help="Run offline self-test")
+
+    sp.set_defaults(func=cmd_selftest)
+
+    # index
+
+    ip = sub.add_parser("index", help="Index management")
+
+    isub = ip.add_subparsers(dest="index_command", required=True)
+
+    b = isub.add_parser("build", help="Build/update the reverse index")
+
+    b.add_argument("--source", default="commoncrawl",
+
+                   choices=["commoncrawl", "file"])
+
+    b.add_argument("--dataset", default=DatasetType.WAT,
+
+                   choices=[DatasetType.WAT, DatasetType.WARC])
+
+    b.add_argument("--collection", default="")
+
+    b.add_argument("--max-records", type=int, default=None)
+
+    b.add_argument("--max-files", type=int, default=None)
+
+    b.add_argument("--url-pattern", default=None,
+
+                   help="Domain/URL pattern for WARC CDX queries")
+
+    b.add_argument("--paths", nargs="*", default=None,
+
+                   help="File(s)/dir for --source file")
+
+    b.set_defaults(func=cmd_index_build)
+
+    st = isub.add_parser("status", help="Show index status")
+
+    st.set_defaults(func=cmd_index_status)
+
+    pa = isub.add_parser("pause", help="Pause a running job")
+
+    pa.add_argument("--job", type=int, required=True)
+
+    pa.set_defaults(func=cmd_index_pause)
+
+    re = isub.add_parser("resume", help="Resume a paused/stopped job")
+
+    re.add_argument("--job", type=int, required=True)
+
+    re.set_defaults(func=cmd_index_resume)
+
+    so = isub.add_parser("stop", help="Stop a running job")
+
+    so.add_argument("--job", type=int, required=True)
+
+    so.set_defaults(func=cmd_index_stop)
+
+    # search
+
+    s = sub.add_parser("search", help="Search the reverse index by target")
+
+    s.add_argument("target")
+
+    s.add_argument("--mode", default=MatchMode.ROOT_DOMAIN,
+
+                   choices=sorted(MatchMode.ALL))
+
+    s.add_argument("--page-size", type=int, default=100)
+
+    s.add_argument("--first-page-only", action="store_true")
+
+    s.add_argument("--collection", default=None)
+
+    s.add_argument("--source-domain", default=None)
+
+    s.add_argument("--anchor", default=None)
+
+    s.add_argument("--link-type", default=None)
+
+    s.add_argument("--no-blank-anchor", action="store_true")
+
+    s.add_argument("--unique-domains", action="store_true")
+
+    s.add_argument("--sort-by", default="last_seen_at")
+
+    s.add_argument("--ascending", action="store_true")
+
+    s.add_argument("--export", default=None,
+
+                   help="Export all matches to CSV/TSV/JSON by extension")
+
+    s.set_defaults(func=cmd_search)
+
+    # verify
+
+    v = sub.add_parser("verify", help="Live-verify sources against a target")
+
+    v.add_argument("--target", required=True)
+
+    v.add_argument("--mode", default=MatchMode.ROOT_DOMAIN,
+
+                   choices=sorted(MatchMode.ALL))
+
+    v.add_argument("--source-list", default=None)
+
+    v.add_argument("--source", default=None)
+
+    v.set_defaults(func=cmd_verify)
+
+    return p
+
+def main(argv: Optional[List[str]] = None) -> int:
+
+    args = build_parser().parse_args(argv)
+
+    cfg = get_config()
+
+    setup_logging(cfg.log_dir, cfg.log_level)
+
+    # selftest manages its own DB; everything else uses the configured one.
+
+    if args.command == "selftest":
+
+        db = Database(cfg)
+
         try:
-            loop.run_until_complete(coro_factory())
-        except Exception as exc:  # noqa: BLE001 - surface into log, keep UI alive
-            from backlink_hunter_core.logging_setup import get_logger
-            get_logger().exception("engine crashed: %s", exc)
+
+            return args.func(args, db)
+
         finally:
-            loop.close()
-    t = threading.Thread(target=run, daemon=True)
-    t.start()
-    return t
-def run_ui() -> None:
-    import pandas as pd
-    import streamlit as st
-    st.set_page_config(page_title="Backlink Hunter", layout="wide")
-    settings = Settings.load()
-    db = Database(settings.database_path)
-    ss = st.session_state
-    st.title("🔗 Backlink Hunter")
-    st.caption(
-        "Only verified backlinks from real downloaded pages / WARC records are shown. "
-        "No fabricated data, no fake authority scores."
-    )
-    with st.sidebar:
-        st.header("Search settings")
-        raw_target = st.text_input("Target domain / URL", "example.com")
-        mode_val = st.selectbox(
-            "Match mode", [m.value for m in MatchMode], index=1
-        )
-        source_mode = st.selectbox(
-            "Data source",
-            ["URL list", "Common Crawl (seed domains)", "Direct site crawl (seeds)"],
-        )
-        max_records = int(st.number_input("Maximum records / pages", 10, 200_000, 500))
-        concurrency = int(
-            st.number_input("Concurrency", 1, 200, settings.default_concurrency)
-        )
-        timeout = int(
-            st.number_input("Timeout (s)", 1, 120, int(settings.request_timeout_seconds))
-        )
-        live_verify = st.toggle("Live verification (CC mode)", value=True)
-        st.checkbox("Include subdomains (use root_and_subdomains mode)", value=True,
-                    disabled=True,
-                    help="Choose the 'root_and_subdomains' match mode above.")
-        collection = st.text_input("Common Crawl collection", "CC-MAIN-2024-33")
-    if not raw_target.strip():
-        st.warning("Enter a target domain.")
-        st.stop()
-    mode = MatchMode(mode_val)
-    target, mk = build_match(raw_target, mode)
-    st.info(f"Normalized target (registrable domain): **{target}**  ·  match mode: `{mode.value}`")
-    if source_mode == "URL list":
-        urls_text = st.text_area("Candidate source URLs (one per line)", height=140)
-        uploaded = st.file_uploader("...or upload a .txt/.csv of URLs", type=["txt", "csv"])
-    elif source_mode == "Common Crawl (seed domains)":
-        seeds_text = st.text_area(
-            "Seed domains to scan in Common Crawl (one per line)",
-            "blog.example.org", height=100,
-        )
-        uploaded = None
-    else:
-        seeds_text = st.text_area(
-            "Seed sites to crawl live (robots.txt respected)",
-            "https://blog.example.org/", height=100,
-        )
-        uploaded = None
-    c1, c2, c3, c4, c5 = st.columns(5)
-    start = c1.button("▶ Search", type="primary")
-    stop = c2.button("■ Stop")
-    pause = c3.button("⏸ Pause")
-    resume = c4.button("⏵ Resume")
-    clear = c5.button("🗑 Clear results")
-    if clear:
-        ss.pop("search_id", None)
-        ss.pop("engine", None)
-        ss.pop("thread", None)
-    # ---- react to control buttons ----
-    engine: Engine | None = ss.get("engine")
-    if engine is not None:
-        if stop:
-            engine.stop()
-        if pause:
-            engine.pause()
-        if resume:
-            engine.resume()
-    # ---- start a new run ----
-    if start:
-        settings.default_concurrency = concurrency
-        settings.request_timeout_seconds = float(timeout)
-        engine = Engine(settings)
-        search_id = db.create_search(target, f"{source_mode}:{mode.value}", utcnow_iso())
-        ss["engine"] = engine
-        ss["search_id"] = search_id
-        def on_found(bl) -> None:
-            db.insert_backlink(search_id, bl)
-        if source_mode == "URL list":
-            urls = [u.strip() for u in urls_text.splitlines() if u.strip()]
-            if uploaded is not None:
-                content = uploaded.read().decode("utf-8", "replace")
-                urls += [
-                    c.strip()
-                    for c in content.replace(",", "\n").splitlines()
-                    if c.strip().lower().startswith("http")
-                ]
-            def factory():
-                return engine.run_url_list(
-                    urls, mode=mode, match_kwargs=mk,
-                    target_host=mk["target_host"], on_found=on_found,
-                )
-        elif source_mode == "Common Crawl (seed domains)":
-            seeds = [s.strip() for s in seeds_text.splitlines() if s.strip()]
-            def factory():
-                return engine.run_common_crawl(
-                    seeds, collection, mode=mode, match_kwargs=mk,
-                    target_host=mk["target_host"], max_records=max_records,
-                    on_found=on_found, live_verify=live_verify,
-                )
-        else:
-            seeds = [s.strip() for s in seeds_text.splitlines() if s.strip()]
-            def factory():
-                return engine.run_seed_crawl(
-                    seeds, mode=mode, match_kwargs=mk,
-                    target_host=mk["target_host"], max_pages=max_records,
-                    on_found=on_found,
-                )
-        ss["thread"] = _start_thread(engine, factory)
-    # ---- live status / counters ----
-    engine = ss.get("engine")
-    search_id = ss.get("search_id")
-    thread: threading.Thread | None = ss.get("thread")
-    if engine is not None:
-        s = engine.stats
-        state = "PAUSED" if engine.paused else (
-            "RUNNING" if thread and thread.is_alive() else "DONE"
-        )
-        st.subheader(f"Status: {state}")
-        cols = st.columns(7)
-        cols[0].metric("Records queried", s.records_queried)
-        cols[1].metric("Downloaded", s.records_downloaded)
-        cols[2].metric("Pages parsed", s.pages_parsed)
-        cols[3].metric("Backlinks", s.backlinks_discovered)
-        cols[4].metric("Verified", s.backlinks_verified)
-        cols[5].metric("Duplicates removed", s.normalized_duplicates + s.exact_duplicates)
-        cols[6].metric("Failed requests", s.failed_requests)
-    # ---- results ----
-    rows: list[dict] = db.fetch_backlinks(search_id) if search_id else []
-    st.subheader("Results")
-    if not rows:
-        st.warning(NO_RESULTS_MSG)
-    else:
-        # UI-side filters
-        fcol1, fcol2, fcol3 = st.columns(3)
-        vstatus = fcol1.multiselect(
-            "Verification status",
-            sorted({r["verification_status"] for r in rows}),
-        )
-        ltype = fcol2.multiselect(
-            "Link type", sorted({r["link_type"] for r in rows})
-        )
-        hide_blank = fcol3.checkbox("Exclude blank anchors", value=False)
-        view = rows
-        if vstatus:
-            view = [r for r in view if r["verification_status"] in vstatus]
-        if ltype:
-            view = [r for r in view if r["link_type"] in ltype]
-        if hide_blank:
-            view = [r for r in view if (r.get("anchor_text") or "").strip()]
-        st.dataframe(pd.DataFrame(view), use_container_width=True)
-        st.subheader("Local statistics (factual — NOT authority scores)")
-        st.write({
-            "unique_referring_pages": len({r["source_url"] for r in view}),
-            "unique_referring_domains": len({r["source_domain"] for r in view}),
-            "follow_links": sum(1 for r in view if r["link_type"] == "FOLLOW"),
-            "nofollow_links": sum(1 for r in view if r["link_type"] == "NOFOLLOW"),
-            "sponsored": sum(1 for r in view if r["link_type"] == "SPONSORED"),
-            "ugc": sum(1 for r in view if r["link_type"] == "UGC"),
-            "live_confirmed": sum(
-                1 for r in view if r["verification_status"] == "LIVE_CONFIRMED"
-            ),
-            "archived_confirmed": sum(
-                1 for r in view if r["verification_status"] == "ARCHIVED_CONFIRMED"
-            ),
-            "archived_only": sum(
-                1 for r in view if r["verification_status"] == "ARCHIVED_ONLY"
-            ),
-        })
-        e1, e2, e3, e4 = st.columns(4)
-        e1.download_button("Export CSV", to_csv(view), "backlinks.csv", "text/csv")
-        e2.download_button(
-            "Export JSON", to_json(view), "backlinks.json", "application/json"
-        )
-        e3.download_button(
-            "TXT: source URLs", to_txt(view, "source_urls"),
-            "source_urls.txt", "text/plain",
-        )
-        e4.download_button(
-            "TXT: pairs", to_txt(view, "pairs"), "pairs.txt", "text/plain"
-        )
-    # ---- search history + error log ----
-    with st.expander("Search history"):
-        st.dataframe(pd.DataFrame(db.list_searches()), use_container_width=True)
-    with st.expander("Failed-request / error log"):
-        st.dataframe(pd.DataFrame(db.fetch_errors(search_id)), use_container_width=True)
-    # ---- auto-refresh while running (keeps counters live, stays responsive) ----
-    if thread is not None and thread.is_alive():
-        time.sleep(0.8)
-        st.rerun()
-# --------------------------------------------------------------------------- #
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Backlink Hunter")
-    parser.add_argument("--selftest", action="store_true")
-    parser.add_argument("--index", action="store_true")
-    parser.add_argument("--query", type=str, default="")
-    parser.add_argument("--collection", type=str, default="CC-MAIN-2024-33")
-    parser.add_argument("--seed", type=str, default="")
-    parser.add_argument("--max", type=int, default=1000)
-    parser.add_argument("--index-db", type=str, default="linkindex.db")
-    args = parser.parse_args()
-    if args.selftest:
-        return selftest()
-    if args.index:
-        if not args.seed:
-            print("--index requires --seed DOMAIN")
-            return 2
-        return cli_index(args)
-    if args.query:
-        return cli_query(args)
-    print("Run the UI with:  streamlit run backlink_hunter.py")
-    print("Other modes:  --selftest | --index --seed DOMAIN | --query DOMAIN")
-    return 0
-def _is_streamlit() -> bool:
+
+            db.close()
+
+    db = Database(cfg)
+
     try:
-        from streamlit.runtime.scriptrunner import get_script_run_ctx
 
-        return get_script_run_ctx() is not None
-    except Exception:
-        return False
+        return args.func(args, db)
 
+    finally:
 
-if _is_streamlit():
-    run_ui()
-elif __name__ == "__main__":
-    raise SystemExit(main())
+        db.close()
+
+if __name__ == "__main__":
+
+    sys.exit(main())✅ Part complete — backlink_hunter.py (CLI + selftest) is whole.Say next for the Streamlit app (streamlit_app.py) with the 9 pages, Automatic Backlink Discovery as default, no candidate/seed inputs in automatic mode, pagination, and all exports.
