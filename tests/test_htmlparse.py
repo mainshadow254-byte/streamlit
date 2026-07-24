@@ -1,33 +1,107 @@
-from pathlib import Path
-from backlink_hunter_core.htmlparse import classify_rel, extract_links
-from backlink_hunter_core.matching import MatchMode, matches_target
-FIX = Path(__file__).parent / "fixtures" / "sample.html"
+"""Tests: HTML link extraction, rel classification, images, malformed HTML."""
+
+from __future__ import annotations
+
+from backlink_hunter_core.htmlparse import classify_rel, parse_html_links, parse_title
+
+from backlink_hunter_core.models import LinkType
+
+BASE = "https://blog.example/post"
+
+def test_extracts_only_real_links_not_plaintext():
+
+    html = """
+
+    <a href="https://amazon.com/x">buy</a>
+
+    <p>I mention amazon.com in text but do not link it.</p>
+
+    """
+
+    links = parse_html_links(html, BASE)
+
+    hosts = [l.hostname for l in links]
+
+    assert hosts.count("amazon.com") == 1
+
+def test_ignores_mailto_js_empty():
+
+    html = """
+
+    <a href="mailto:a@b.com">m</a>
+
+    <a href="javascript:void(0)">j</a>
+
+    <a href="">empty</a>
+
+    <a href="https://ok.com">ok</a>
+
+    """
+
+    links = parse_html_links(html, BASE)
+
+    assert len(links) == 1
+
+    assert links[0].hostname == "ok.com"
+
+def test_relative_and_protocol_relative():
+
+    html = '<a href="/rel">r</a><a href="//cdn.example.net/x">p</a>'
+
+    links = parse_html_links(html, BASE)
+
+    hosts = {l.hostname for l in links}
+
+    assert "blog.example" in hosts
+
+    assert "cdn.example.net" in hosts
+
+def test_image_link_uses_alt_when_no_text():
+
+    html = '<a href="https://amazon.com/x"><img src="a.png" alt="Amazon logo"></a>'
+
+    links = parse_html_links(html, BASE)
+
+    assert len(links) == 1
+
+    assert links[0].image_alt == "Amazon logo"
+
+    assert links[0].anchor_text == ""
+
 def test_rel_classification():
-    assert classify_rel("nofollow") == "NOFOLLOW"
-    assert classify_rel("sponsored") == "SPONSORED"
-    assert classify_rel("ugc") == "UGC"
-    assert classify_rel("nofollow ugc") == "MULTIPLE_REL_VALUES"
-    assert classify_rel("") == "FOLLOW"
-def test_extract_excludes_and_resolves():
-    html = FIX.read_text(encoding="utf-8")
-    title, links = extract_links(html, "https://blog.test/post")
-    assert title == "Test Post"
-    resolved = [l.resolved for l in links]
-    assert "mailto:x@y.com" not in resolved
-    assert "tel:+123" not in resolved
-    assert any(r.startswith("https://blog.test/relative") for r in resolved)
-    assert any(r.startswith("https://example.com/pr") for r in resolved)  # protocol-relative
-def test_only_real_hyperlinks_count():
-    html = FIX.read_text(encoding="utf-8")
-    _title, links = extract_links(html, "https://blog.test/post")
-    mk = dict(
-        target_host="example.com", target_root="example.com",
-        target_url="https://example.com/", target_path_prefix="/",
-    )
-    hits = [
-        l for l in links
-        if matches_target(l.resolved, mode=MatchMode.ROOT_AND_SUBDOMAINS, **mk)
-    ]
-    # www.example.com/product and //example.com/pr -> 2 real links; text mention excluded
-    assert len(hits) == 2
-    assert any(h.link_type == "NOFOLLOW" for h in hits)
+
+    assert classify_rel("") == LinkType.FOLLOW
+
+    assert classify_rel("nofollow") == LinkType.NOFOLLOW
+
+    assert classify_rel("sponsored") == LinkType.SPONSORED
+
+    assert classify_rel("ugc") == LinkType.UGC
+
+    assert classify_rel("nofollow sponsored") == LinkType.MULTIPLE_REL_VALUES
+
+    assert classify_rel("ugc nofollow") == LinkType.MULTIPLE_REL_VALUES
+
+def test_malformed_html_does_not_crash():
+
+    html = '<a href="https://amazon.com/x">unclosed <b>bold'
+
+    links = parse_html_links(html, BASE)
+
+    assert any(l.hostname == "amazon.com" for l in links)
+
+def test_commented_out_links_ignored():
+
+    html = '<!-- <a href="https://amazon.com/c">c</a> --><a href="https://ok.com">o</a>'
+
+    links = parse_html_links(html, BASE)
+
+    hosts = {l.hostname for l in links}
+
+    assert "ok.com" in hosts
+
+    assert "amazon.com" not in hosts
+
+def test_title_extraction():
+
+    assert parse_title("<html><head><title>Hi</title></head></html>") == "Hi"✅ test_normalize_matching.py and test_htmlparse.py are whole.Say next for the DB/migrations/search/export tests and the WAT/WARC/import tests
