@@ -104,4 +104,4 @@ def test_commented_out_links_ignored():
 
 def test_title_extraction():
 
-    assert parse_title("<html><head><title>Hi</title></head></html>") == "Hi"✅ test_normalize_matching.py and test_htmlparse.py are whole.Say next for the DB/migrations/search/export tests and the WAT/WARC/import tests
+    assert parse_title("<html><head><title>Hi</title></head></html>") == "Hi"

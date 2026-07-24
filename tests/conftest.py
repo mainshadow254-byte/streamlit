@@ -8,8 +8,6 @@ import sys
 
 import pytest
 
-# Ensure repo root on path.
-
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from backlink_hunter_core.config import Config, set_config  # noqa: E402
@@ -56,4 +54,4 @@ def build_fixtures_once():
 
         pass
 
-    yield✅ tests/conftest.py is whole.Say next for the actual test modules (normalization/matching, htmlparse/rel, db/migrations/search/export, WAT/WARC/import, verification/SSRF, jobs/checkpoints, empty-index + proof mode).
+    yield
