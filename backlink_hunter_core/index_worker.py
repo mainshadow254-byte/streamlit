@@ -1,20 +1,4 @@
-"""Background streaming indexer.
-
-Runs an indexing job in a worker thread, honouring pause / resume / stop flags
-
-that are persisted in SQLite (so control survives browser refreshes). Streams
-
-records, batches inserts, checkpoints progress, and can resume from the last
-
-checkpoint. Supports:
-
-  - Common Crawl WAT ingestion (by collection)
-
-  - Common Crawl WARC ingestion (by collection)
-
-  - User-supplied file import (single file or directory)
-
-"""
+"""Background streaming indexer with pause/resume/stop and checkpoints."""
 
 from __future__ import annotations
 
@@ -26,7 +10,7 @@ import threading
 
 import time
 
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .config import Config, get_config
 
@@ -38,9 +22,9 @@ from .importers import (
 
     ImportError_,
 
-    backlinks_from_wat_page,
-
     backlinks_from_warc_record,
+
+    backlinks_from_wat_page,
 
     import_file,
 
@@ -89,15 +73,7 @@ class IndexWorker:
 
         self._thread: Optional[threading.Thread] = None
 
-    # ------------------------------------------------------------------ #
-
-    # Public entry points
-
-    # ------------------------------------------------------------------ #
-
     def start(self, params: Dict[str, Any], background: bool = True) -> int:
-
-        """Create a job and start indexing. Returns the job id."""
 
         handle = self.jobs.create("index", params)
 
@@ -143,12 +119,6 @@ class IndexWorker:
 
             self._thread.join(timeout)
 
-    # ------------------------------------------------------------------ #
-
-    # Core run loop
-
-    # ------------------------------------------------------------------ #
-
     def _run(self, handle: JobHandle) -> None:
 
         params = (self.db.get_job(handle.job_id) or {}).get("params", {})
@@ -177,7 +147,7 @@ class IndexWorker:
 
             else:
 
-                raise ImportError_(f"Unsupported dataset/source: {source}/{dataset}")
+                raise ImportError_(f"Unsupported source/dataset: {source}/{dataset}")
 
             if handle.is_cancelled():
 
@@ -191,7 +161,7 @@ class IndexWorker:
 
             handle.mark_failed(f"Disk space: {exc}")
 
-        except Exception as exc:  # keep the worker alive; record failure
+        except Exception as exc:
 
             log.exception("Indexing job %d failed", handle.job_id)
 
@@ -199,19 +169,11 @@ class IndexWorker:
 
             handle.mark_failed(str(exc))
 
-    # ------------------------------------------------------------------ #
-
-    # Cooperative pause / cancel
-
-    # ------------------------------------------------------------------ #
-
     def _should_stop(self, handle: JobHandle) -> bool:
 
         if handle.is_cancelled():
 
             return True
-
-        # Block while paused, polling flags.
 
         while handle.is_paused():
 
@@ -231,12 +193,6 @@ class IndexWorker:
 
         return False
 
-    # ------------------------------------------------------------------ #
-
-    # Batch flushing
-
-    # ------------------------------------------------------------------ #
-
     def _flush_batch(self, handle: JobHandle, batch: List[Backlink]) -> None:
 
         if not batch:
@@ -250,12 +206,6 @@ class IndexWorker:
         handle.bump("duplicates_skipped", dupes)
 
         handle.flush()
-
-    # ------------------------------------------------------------------ #
-
-    # Common Crawl WAT
-
-    # ------------------------------------------------------------------ #
 
     def _index_commoncrawl_wat(self, handle: JobHandle, params: Dict[str, Any]) -> None:
 
@@ -349,12 +299,6 @@ class IndexWorker:
 
         self._flush_batch(handle, batch)
 
-    # ------------------------------------------------------------------ #
-
-    # Common Crawl WARC
-
-    # ------------------------------------------------------------------ #
-
     def _index_commoncrawl_warc(self, handle: JobHandle, params: Dict[str, Any]) -> None:
 
         collection = params["collection"]
@@ -367,9 +311,7 @@ class IndexWorker:
 
             raise ImportError_(
 
-                "WARC indexing requires a 'url_pattern' to query the CDX index."
-
-            )
+                "WARC indexing requires a 'url_pattern' to query the CDX index.")
 
         handle.flush(stage="querying CDX")
 
@@ -439,12 +381,6 @@ class IndexWorker:
 
         self._flush_batch(handle, batch)
 
-    # ------------------------------------------------------------------ #
-
-    # User files
-
-    # ------------------------------------------------------------------ #
-
     def _index_files(self, handle: JobHandle, params: Dict[str, Any]) -> None:
 
         paths: List[str] = params.get("paths", [])
@@ -505,4 +441,4 @@ class IndexWorker:
 
             handle.save_checkpoint("files", {"file_index": fi + 1})
 
-        self._flush_batch(handle, batch)✅ Part complete — index_jobs.py and index_worker.py are whole.Say next for backlink_hunter.py (the CLI entry point with selftest, index build/status/pause/resume/stop, search, verify).
+        self._flush_batch(handle, batch)

@@ -1,28 +1,4 @@
-"""User-supplied dataset importers and record builders.
-
-Converts multiple input formats into normalized Backlink records ready for
-
-insertion. All importers stream where possible and validate/reject malformed
-
-rows safely. Example/fixture data must be imported with dataset_type='fixture'
-
-so it can never masquerade as production crawl data.
-
-Supported inputs:
-
-  - CSV
-
-  - JSONL / JSON (array)
-
-  - Parquet (optional, requires pyarrow)
-
-  - WARC / WARC.gz
-
-  - WAT / WAT.gz
-
-  - gzip-compressed CSV / JSONL
-
-"""
+"""User-supplied dataset importers and record builders."""
 
 from __future__ import annotations
 
@@ -32,13 +8,11 @@ import gzip
 
 import hashlib
 
-import io
-
 import json
 
 import os
 
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Iterator, Optional
 
 from .htmlparse import classify_rel, parse_html_links, parse_title
 
@@ -49,10 +23,6 @@ from .models import Backlink, DatasetType, LinkType, VerificationStatus, utcnow_
 from .normalize import (
 
     extract_hostname,
-
-    normalize_target_domain,
-
-    normalize_target_hostname,
 
     normalize_url,
 
@@ -72,12 +42,6 @@ class ImportError_(Exception):
     """Raised for unsupported or malformed imports."""
 
 REQUIRED_CSV_COLUMNS = {"source_url", "target_url"}
-
-# --------------------------------------------------------------------------- #
-
-# Record builder
-
-# --------------------------------------------------------------------------- #
 
 def _evidence_hash(*parts: str) -> str:
 
@@ -104,8 +68,6 @@ def build_backlink(source_url: str, target_url: str, *,
                    verification_status: str = VerificationStatus.ARCHIVED_ONLY
 
                    ) -> Optional[Backlink]:
-
-    """Build a normalized Backlink from raw fields. Returns None if invalid."""
 
     if not source_url or not target_url:
 
@@ -187,12 +149,6 @@ def build_backlink(source_url: str, target_url: str, *,
 
     )
 
-# --------------------------------------------------------------------------- #
-
-# WAT page -> backlinks
-
-# --------------------------------------------------------------------------- #
-
 def backlinks_from_wat_page(page: WatPage, *, collection: str = "",
 
                             record_filename: str = "",
@@ -219,8 +175,6 @@ def backlinks_from_wat_page(page: WatPage, *, collection: str = "",
 
         image_alt = wl.alt or ""
 
-        # Image link with no anchor text -> use alt.
-
         bl = build_backlink(
 
             source_url=source_url,
@@ -246,12 +200,6 @@ def backlinks_from_wat_page(page: WatPage, *, collection: str = "",
         if bl:
 
             yield bl
-
-# --------------------------------------------------------------------------- #
-
-# WARC record -> backlinks
-
-# --------------------------------------------------------------------------- #
 
 def backlinks_from_warc_record(rec: WarcRecord, *, collection: str = "",
 
@@ -310,12 +258,6 @@ def backlinks_from_warc_record(rec: WarcRecord, *, collection: str = "",
         if bl:
 
             yield bl
-
-# --------------------------------------------------------------------------- #
-
-# File importers (streaming)
-
-# --------------------------------------------------------------------------- #
 
 def _open_maybe_gzip(path: str):
 
@@ -487,7 +429,7 @@ def import_parquet(path: str, *, collection: str = "",
 
             "Parquet import requires the optional dependency 'pyarrow'. "
 
-            "Install with: pip install backlink-hunter[parquet]"
+            "Install with: pip install pyarrow"
 
         )
 
@@ -557,12 +499,6 @@ def import_wat(path: str, *, collection: str = "") -> Iterator[Backlink]:
 
             page, collection=collection, record_filename=fname)
 
-# --------------------------------------------------------------------------- #
-
-# Dispatch by extension
-
-# --------------------------------------------------------------------------- #
-
 def import_file(path: str, *, collection: str = "") -> Iterator[Backlink]:
 
     lower = path.lower()
@@ -593,4 +529,4 @@ def import_file(path: str, *, collection: str = "") -> Iterator[Backlink]:
 
     else:
 
-        raise ImportError_(f"Unsupported file format: {os.path.basename(path)}")✅ Part complete — importers.py is whole.Say next for index_jobs.py (persisted job state manager) and index_worker.py (background streaming indexer with pause/resume/stop/checkpoints).
+        raise ImportError_(f"Unsupported file format: {os.path.basename(path)}")
