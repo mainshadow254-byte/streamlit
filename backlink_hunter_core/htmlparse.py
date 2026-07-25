@@ -118,6 +118,16 @@ class _LinkParser(HTMLParser):
 
             self._a_stack[-1]["text"].append(data.strip())
 
+    def flush_open_anchors(self):
+
+        """Emit any anchors whose closing tag never arrived (malformed HTML)."""
+
+        while self._a_stack:
+
+            ctx = self._a_stack.pop()
+
+            self._finish_anchor(ctx)
+
     def _finish_anchor(self, ctx: dict):
 
         href = ctx["href"]
@@ -171,6 +181,8 @@ def parse_html_links(html: str, base_url: str) -> List[ExtractedLink]:
     except Exception:
 
         pass
+
+    parser.flush_open_anchors()
 
     return parser.links
 

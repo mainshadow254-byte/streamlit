@@ -184,27 +184,49 @@ class SearchService:
 
         return f" ORDER BY {col} {direction}, id {direction}"
 
-    def _from_clause(self, f: SearchFilters) -> str:
+    def _base_query(self, f: SearchFilters,
 
-        if f.unique_source_domain:
+                    select_expr: str) -> Tuple[str, List[Any]]:
 
-            return "(SELECT * FROM reverse_links GROUP BY source_domain) AS reverse_links"
+        """Build the FROM/WHERE core with WHERE applied BEFORE any dedup grouping.
 
-        if f.unique_source_page:
+        The dedup (unique source domain/page) is expressed with GROUP BY on the
 
-            return ("(SELECT * FROM reverse_links GROUP BY normalized_source_url) "
+        already-filtered rows, so the target/filters constrain the set first and
 
-                    "AS reverse_links")
+        the survivor of each group is always a matching row.
 
-        return "reverse_links"
-
-    def count(self, f: SearchFilters) -> int:
+        """
 
         where, params = self._build_where(f)
 
-        frm = self._from_clause(f)
+        group = ""
 
-        sql = f"SELECT COUNT(*) AS c FROM {frm}{where}"
+        if f.unique_source_domain:
+
+            group = " GROUP BY source_domain"
+
+        elif f.unique_source_page:
+
+            group = " GROUP BY normalized_source_url"
+
+        sql = f"SELECT {select_expr} FROM reverse_links{where}{group}"
+
+        return sql, params
+
+    def count(self, f: SearchFilters) -> int:
+
+        if f.unique_source_domain or f.unique_source_page:
+
+            inner, params = self._base_query(f, "1")
+
+            sql = f"SELECT COUNT(*) AS c FROM ({inner})"
+
+        else:
+
+            where, params = self._build_where(f)
+
+            sql = f"SELECT COUNT(*) AS c FROM reverse_links{where}"
 
         row = self.db.conn.execute(sql, params).fetchone()
 
@@ -214,15 +236,13 @@ class SearchService:
 
              page_size: int = 50) -> List[Dict[str, Any]]:
 
-        where, params = self._build_where(f)
-
-        frm = self._from_clause(f)
+        inner, params = self._base_query(f, "*")
 
         order = self._order_by(f)
 
         offset = max(0, (max(1, page) - 1) * page_size)
 
-        sql = f"SELECT * FROM {frm}{where}{order} LIMIT ? OFFSET ?"
+        sql = f"{inner}{order} LIMIT ? OFFSET ?"
 
         rows = self.db.conn.execute(sql, params + [page_size, offset]).fetchall()
 
@@ -230,9 +250,9 @@ class SearchService:
 
     def iter_all(self, f: SearchFilters, chunk: int = 1000) -> Iterator[Dict[str, Any]]:
 
-        where, params = self._build_where(f)
+        """Stream all matching rows for export without loading everything."""
 
-        frm = self._from_clause(f)
+        inner, params = self._base_query(f, "*")
 
         order = self._order_by(f)
 
@@ -240,7 +260,7 @@ class SearchService:
 
         while True:
 
-            sql = f"SELECT * FROM {frm}{where}{order} LIMIT ? OFFSET ?"
+            sql = f"{inner}{order} LIMIT ? OFFSET ?"
 
             rows = self.db.conn.execute(sql, params + [chunk, offset]).fetchall()
 
@@ -248,9 +268,9 @@ class SearchService:
 
                 break
 
-            for r in rows:
+            for row in rows:
 
-                yield dict(r)
+                yield dict(row)
 
             offset += chunk
 
@@ -264,7 +284,7 @@ class SearchService:
 
         ).fetchall()
 
-        return [r["collection"] for r in rows]
+        return [row["collection"] for row in rows]
 
     def available_source_domains(self, limit: int = 500) -> List[str]:
 
@@ -276,4 +296,4 @@ class SearchService:
 
         ).fetchall()
 
-        return [r["source_domain"] for r in rows if r["source_domain"]]
+        return [row["source_domain"] for row in rows if row["source_domain"]]
