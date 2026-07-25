@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 
-import os
-
 from backlink_hunter_core.export import (
 
     export_csv, export_json, export_source_urls, export_source_target_pairs,
@@ -49,9 +47,9 @@ def test_insert_and_count(db):
 
     bls = [
 
-        _mk("https://a.example/1", "https://amazon.com/x", anchor_text="a"),
+        _mk("https://a-site.com/1", "https://amazon.com/x", anchor_text="a"),
 
-        _mk("https://b.example/2", "https://amazon.com/y", anchor_text="b"),
+        _mk("https://b-site.com/2", "https://amazon.com/y", anchor_text="b"),
 
     ]
 
@@ -63,9 +61,9 @@ def test_insert_and_count(db):
 
 def test_duplicate_source_target_deduped(db):
 
-    bl1 = _mk("https://a.example/1", "https://amazon.com/x")
+    bl1 = _mk("https://a-site.com/1", "https://amazon.com/x")
 
-    bl2 = _mk("https://a.example/1", "https://amazon.com/x")
+    bl2 = _mk("https://a-site.com/1", "https://amazon.com/x")
 
     db.insert_backlinks([bl1])
 
@@ -75,7 +73,7 @@ def test_duplicate_source_target_deduped(db):
 
 def test_paginated_search(db):
 
-    bls = [_mk(f"https://s{i}.example/p", "https://amazon.com/x")
+    bls = [_mk(f"https://s{i}-site.com/p", "https://amazon.com/x")
 
            for i in range(25)]
 
@@ -99,9 +97,9 @@ def test_search_root_domain_vs_false_positive(db):
 
     db.insert_backlinks([
 
-        _mk("https://a.example/1", "https://www.amazon.com/x"),
+        _mk("https://a-site.com/1", "https://www.amazon.com/x"),
 
-        _mk("https://b.example/2", "https://notamazon.com/x"),
+        _mk("https://b-site.com/2", "https://notamazon.com/x"),
 
     ])
 
@@ -115,9 +113,9 @@ def test_link_type_filter(db):
 
     db.insert_backlinks([
 
-        _mk("https://a.example/1", "https://amazon.com/x", rel_original="nofollow"),
+        _mk("https://a-site.com/1", "https://amazon.com/x", rel_original="nofollow"),
 
-        _mk("https://b.example/2", "https://amazon.com/y", rel_original=""),
+        _mk("https://b-site.com/2", "https://amazon.com/y", rel_original=""),
 
     ])
 
@@ -131,9 +129,9 @@ def test_exclude_blank_anchor(db):
 
     db.insert_backlinks([
 
-        _mk("https://a.example/1", "https://amazon.com/x", anchor_text="hi"),
+        _mk("https://a-site.com/1", "https://amazon.com/x", anchor_text="hi"),
 
-        _mk("https://b.example/2", "https://amazon.com/y", anchor_text=""),
+        _mk("https://b-site.com/2", "https://amazon.com/y", anchor_text=""),
 
     ])
 
@@ -145,13 +143,19 @@ def test_exclude_blank_anchor(db):
 
 def test_unique_source_domain(db):
 
+    # Two distinct registrable domains (a-site.com, b-site.com); three rows.
+
+    # unique_source_domain must collapse the two a-site.com rows into one,
+
+    # leaving 2 distinct referring domains.
+
     db.insert_backlinks([
 
-        _mk("https://a.example/1", "https://amazon.com/x"),
+        _mk("https://a-site.com/1", "https://amazon.com/x"),
 
-        _mk("https://a.example/2", "https://amazon.com/y"),
+        _mk("https://a-site.com/2", "https://amazon.com/y"),
 
-        _mk("https://b.example/3", "https://amazon.com/z"),
+        _mk("https://b-site.com/3", "https://amazon.com/z"),
 
     ])
 
@@ -161,11 +165,31 @@ def test_unique_source_domain(db):
 
     assert svc.count(f) == 2
 
+def test_unique_source_page(db):
+
+    # Same source page linking to two targets; unique_source_page collapses to 1.
+
+    db.insert_backlinks([
+
+        _mk("https://a-site.com/1", "https://amazon.com/x"),
+
+        _mk("https://a-site.com/1", "https://amazon.com/y"),
+
+        _mk("https://a-site.com/2", "https://amazon.com/z"),
+
+    ])
+
+    svc = SearchService(db)
+
+    f = SearchFilters(target="amazon.com", unique_source_page=True)
+
+    assert svc.count(f) == 2
+
 def test_streamed_csv_export(db):
 
     db.insert_backlinks([
 
-        _mk("https://a.example/1", "https://amazon.com/x", anchor_text="a"),
+        _mk("https://a-site.com/1", "https://amazon.com/x", anchor_text="a"),
 
     ])
 
@@ -185,9 +209,9 @@ def test_streamed_json_export_is_valid(db):
 
     db.insert_backlinks([
 
-        _mk("https://a.example/1", "https://amazon.com/x"),
+        _mk("https://a-site.com/1", "https://amazon.com/x"),
 
-        _mk("https://b.example/2", "https://amazon.com/y"),
+        _mk("https://b-site.com/2", "https://amazon.com/y"),
 
     ])
 
@@ -209,9 +233,9 @@ def test_export_unique_source_urls(db):
 
     db.insert_backlinks([
 
-        _mk("https://a.example/1", "https://amazon.com/x"),
+        _mk("https://a-site.com/1", "https://amazon.com/x"),
 
-        _mk("https://a.example/1", "https://amazon.com/y"),
+        _mk("https://a-site.com/1", "https://amazon.com/y"),
 
     ])
 
@@ -223,11 +247,11 @@ def test_export_unique_source_urls(db):
 
     data = read_and_cleanup(path).decode("utf-8").strip().splitlines()
 
-    assert data.count("https://a.example/1") == 1
+    assert data.count("https://a-site.com/1") == 1
 
 def test_export_source_target_pairs(db):
 
-    db.insert_backlinks([_mk("https://a.example/1", "https://amazon.com/x")])
+    db.insert_backlinks([_mk("https://a-site.com/1", "https://amazon.com/x")])
 
     svc = SearchService(db)
 
@@ -241,7 +265,7 @@ def test_export_source_target_pairs(db):
 
 def test_delete_collection(db):
 
-    db.insert_backlinks([_mk("https://a.example/1", "https://amazon.com/x")])
+    db.insert_backlinks([_mk("https://a-site.com/1", "https://amazon.com/x")])
 
     assert db.total_backlinks() == 1
 
@@ -257,6 +281,6 @@ def test_empty_index_detected(db):
 
     assert db.is_empty()
 
-    db.insert_backlinks([_mk("https://a.example/1", "https://amazon.com/x")])
+    db.insert_backlinks([_mk("https://a-site.com/1", "https://amazon.com/x")])
 
     assert not db.is_empty()
